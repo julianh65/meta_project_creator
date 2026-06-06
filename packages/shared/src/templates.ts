@@ -14,7 +14,7 @@ export const HEARTBEAT_PROMPT = `Read AGENTS.md, PROJECT.md, QUEUE.md, and LOG.m
 
 You are the persistent manager thread for this project. Keep this conversation focused on durable project direction, decisions, progress updates, and the final result of each work cycle.
 
-Run one autonomous working-phase cycle.
+Run one autonomous working-phase work cycle.
 
 If QUEUE.md has a Now item, work on it.
 Otherwise choose a useful next task for the MVP.
@@ -75,6 +75,7 @@ If work takes a while, print brief progress updates after meaningful steps so th
 When the first local demo works, update PROJECT.md:
 - set Build phase to working
 - update Current state with what exists and how to run or view it
+- update Local preview with the exact local run command and localhost URL
 - capture any important decisions
 
 After work, update QUEUE.md and LOG.md. Summarize what changed, what was checked, and what should happen next.`;
@@ -198,7 +199,7 @@ initial-build
 
 Not started yet.
 
-## Heartbeat cadence
+## Work cadence
 
 stale_after_hours: 168
 auto_queue_when_stale: false
@@ -210,6 +211,11 @@ ${platformPolicy(proposal.type)}
 ## Current state
 
 Project created from onboarding. No implementation work has started yet.
+
+## Local preview
+
+- After the initial build, keep this section updated with the exact command and localhost URL Julian should use to inspect the current prototype.
+- If this project has no browser preview, write the smallest useful local inspection instructions here.
 
 ## Initialization
 
@@ -408,6 +414,13 @@ When asked to work autonomously:
 6. Update QUEUE.md and LOG.md.
 7. If blocked or a human decision is needed, write it under \`Needs Julian\`.
 8. If external browser/account/social action is needed, write it under \`Browser/Ops Requests\`.
+
+## Local Preview Contract
+
+When you create or change a runnable prototype, update \`PROJECT.md > Local preview\` or \`PROJECT.md > Current state\` with:
+- the command to run it locally
+- the localhost URL, if there is one
+- any short inspection notes Julian needs
 `;
 }
 

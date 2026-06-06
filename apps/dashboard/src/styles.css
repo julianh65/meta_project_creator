@@ -809,6 +809,34 @@ a {
   color: var(--muted);
 }
 
+.preview-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 170px;
+  gap: 14px;
+  align-items: start;
+}
+
+.preview-main {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.preview-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.url-link {
+  color: var(--blue);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.preview-log pre {
+  max-height: 220px;
+}
+
 .command-box,
 .cadence-box {
   margin-top: 14px;
@@ -1095,6 +1123,7 @@ a {
   .project-hero,
   .project-toolbar,
   .onboarding-layout,
+  .preview-panel,
   .form-grid,
   .starter-grid,
   .file-preview-grid,

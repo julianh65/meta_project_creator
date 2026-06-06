@@ -113,7 +113,9 @@ export function parseProjectMarkdown(
   const statusText = firstNonEmptyLine(getSection(projectMd, "Status"));
   const phaseText = firstNonEmptyLine(getSection(projectMd, "Build phase"));
   const codexThreadText = firstNonEmptyLine(getSection(projectMd, "Codex manager thread"));
-  const cadence = parseHeartbeatCadence(getSection(projectMd, "Heartbeat cadence"));
+  const cadence = parseHeartbeatCadence(
+    getSection(projectMd, "Work cadence") || getSection(projectMd, "Heartbeat cadence")
+  );
 
   const type = PROJECT_TYPES.includes(typeText as ProjectType)
     ? (typeText as ProjectType)

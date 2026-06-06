@@ -236,6 +236,21 @@ export interface ProjectDetail extends ProjectRecord {
   managerExecCommand: string;
 }
 
+export type ProjectPreviewStatus = "unavailable" | "idle" | "starting" | "running" | "failed" | "stopped";
+
+export interface ProjectPreviewInfo {
+  slug: string;
+  status: ProjectPreviewStatus;
+  command: string | null;
+  url: string | null;
+  managed: boolean;
+  pid: number | null;
+  started_at: string | null;
+  updated_at: string;
+  instructions: string[];
+  logs: string;
+}
+
 export interface ProjectDeletionResult {
   slug: string;
   path: string;

@@ -31,6 +31,7 @@ import type {
   ProjectDraft,
   ProjectFileName,
   ProjectPhase,
+  ProjectPreviewInfo,
   ProjectRecord,
   ProjectType,
   RequestRecord,
@@ -182,7 +183,7 @@ function DashboardView({ summary }: { summary: DashboardSummary | null }) {
       <section className="command-center">
         <div className="command-copy">
           <span className="section-kicker">What needs attention</span>
-          <h2>{activeWork ? `${activeWork.job_type} is running` : primaryProject?.current_now_task ?? "No active project task"}</h2>
+          <h2>{activeWork ? `${runTypeLabel(activeWork.job_type)} is running` : primaryProject?.current_now_task ?? "No active project task"}</h2>
           <p>
             {activeWork
               ? `${activeWork.project_slug} was claimed ${timeAgo(activeWork.started_at ?? activeWork.updated_at)} by ${activeWork.worker_id ?? "the local worker"}.`
@@ -215,7 +216,7 @@ function DashboardView({ summary }: { summary: DashboardSummary | null }) {
           {latestRun && (
             <a className="latest-run-link" href="#/runs">
               <RunBadge status={latestRun.status} />
-              <span>{latestRun.run_type} {timeAgo(latestRun.finished_at ?? latestRun.updated_at)}</span>
+              <span>{runTypeLabel(latestRun.run_type)} {timeAgo(latestRun.finished_at ?? latestRun.updated_at)}</span>
             </a>
           )}
         </div>
@@ -248,7 +249,7 @@ function DashboardView({ summary }: { summary: DashboardSummary | null }) {
           {summary.recentRuns.length ? (
             <RunList runs={summary.recentRuns} compact />
           ) : (
-            <EmptyState icon={<Activity size={24} />} title="No runs yet" body="Queue a heartbeat or feedback job." />
+            <EmptyState icon={<Activity size={24} />} title="No runs yet" body="Queue an initial build, feedback, or work cycle." />
           )}
         </Panel>
       </div>
@@ -271,7 +272,7 @@ function DocsView() {
             <ExplainItem
               icon={<LayoutDashboard size={18} />}
               title="Dashboard is the control plane"
-              body="Use it to create projects, inspect state, edit Markdown, queue work, read runs, and answer inbox items. You can still cd into any project and run Codex manually."
+              body="Use it to create projects, inspect state, run local previews, edit Markdown, queue work, read runs, and answer inbox items. You can still cd into any project and run Codex manually."
             />
             <ExplainItem
               icon={<Terminal size={18} />}
@@ -292,8 +293,9 @@ function DocsView() {
             <li>Review PROJECT.md and QUEUE.md. New ideas start in the initial-build phase.</li>
             <li>Start the worker in another terminal.</li>
             <li>Click Start initial build to queue the first local prototype build.</li>
-            <li>Watch Jobs for queued/running state and Runs for logs/results.</li>
-            <li>When the first local demo works, mark the project working and use heartbeats for normal iteration.</li>
+            <li>Watch Agent state, Jobs, and Runs for queued/running state and logs.</li>
+            <li>Use Inspect local preview to start the project's dev server and open its localhost URL.</li>
+            <li>When the first local demo works, mark the project working. Later, scheduled work cycles can run from cadence settings.</li>
             <li>Use the inbox to answer questions or approve/deny external requests.</li>
           </ol>
           <div className="command-box">
@@ -322,30 +324,37 @@ function DocsView() {
             <ExplainItem
               icon={<RefreshCw size={18} />}
               title="Working"
-              body="After a first demo exists, heartbeats become normal autonomous work cycles for improving, testing, documenting, and responding to feedback."
+              body="After a first demo exists, work cycles become normal autonomous turns for improving, testing, documenting, and responding to feedback."
             />
           </div>
         </Panel>
 
         <Panel title="Manager threads and subagents">
           <p className="docs-copy">
-            The project manager is a persistent Codex conversation. Initial builds, heartbeats, and feedback are sent as new turns in that same thread, so the manager keeps context beyond one worker job.
+            The project manager is a persistent Codex conversation. Initial builds, work cycles, and feedback are sent as new turns in that same thread, so the manager keeps context beyond one worker job.
           </p>
           <p className="docs-copy">
             During a turn, the manager prompt allows bounded subagents for exploration, implementation, testing, or review. The main manager thread should keep the durable decisions and summarize subagent results.
           </p>
         </Panel>
 
-        <Panel title="What a heartbeat is">
+        <Panel title="Worker heartbeat">
           <p className="docs-copy">
-            A heartbeat is one autonomous work cycle. It tells the project agent to read AGENTS.md,
-            PROJECT.md, QUEUE.md, and LOG.md, pick the current Now item or another useful MVP task,
-            make scoped local progress, run practical checks, then update QUEUE.md and LOG.md.
+            The worker heartbeat is only a liveness pulse. It updates the sidebar so you can tell whether
+            the local worker process is online and which job it currently owns.
           </p>
           <p className="docs-copy">
-            Heartbeats are explicit. Clicking Heartbeat queues a job; the worker has to be running to
-            execute it. In dry-run mode the worker only proves the queue/log path. With dry-run disabled,
-            it runs the configured Codex command inside the project directory.
+            Actual product work happens in initial builds, feedback turns, or working-phase work cycles.
+            Manual work-cycle buttons are just a temporary queue trigger; scheduled cadence/cron can own
+            that later.
+          </p>
+        </Panel>
+
+        <Panel title="Local previews">
+          <p className="docs-copy">
+            Each project page has Inspect local preview. It reads package.json and PROJECT.md, starts the
+            local dev command when available, captures localhost URLs from server output, and keeps the
+            latest preview logs visible.
           </p>
         </Panel>
 
@@ -469,7 +478,7 @@ function ProjectsView() {
 function ProjectCard({ project, reload }: { project: ProjectRecord; reload: () => Promise<void> }) {
   const [busy, setBusy] = useState(false);
   const actionEndpoint = project.build_phase === "initial-build" ? "initial-build" : "heartbeat";
-  const actionLabel = project.build_phase === "initial-build" ? "Start build" : "Heartbeat";
+  const actionLabel = project.build_phase === "initial-build" ? "Start build" : "Continue dev";
 
   const startWork = async () => {
     setBusy(true);
@@ -520,7 +529,7 @@ function ProjectCard({ project, reload }: { project: ProjectRecord; reload: () =
       <div className="split-counts">
         <span>{project.needs_julian_count ?? 0} need Julian</span>
         <span>{project.browser_ops_count ?? 0} ops</span>
-        <span>{project.last_heartbeat_at ? timeAgo(project.last_heartbeat_at) : "no heartbeat"}</span>
+        <span>{project.last_heartbeat_at ? `work ${timeAgo(project.last_heartbeat_at)}` : "no work cycle yet"}</span>
       </div>
       <div className="button-row">
         <a className="button" href={`#/projects/${project.slug}`}>
@@ -770,6 +779,8 @@ function ProjectDetailView({ slug }: { slug: string }) {
   const [autoQueueWhenStale, setAutoQueueWhenStale] = useState(false);
   const [busy, setBusy] = useState(false);
   const [copiedCommand, setCopiedCommand] = useState(false);
+  const [preview, setPreview] = useState<ProjectPreviewInfo | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
 
   const load = async (options: { syncFile?: boolean } = {}) => {
     const data = await fetchJson<ProjectDetail>(`/api/projects/${slug}`);
@@ -782,9 +793,14 @@ function ProjectDetailView({ slug }: { slug: string }) {
     setLoading(false);
   };
 
+  const loadPreview = async () => {
+    setPreview(await fetchJson<ProjectPreviewInfo>(`/api/projects/${slug}/preview`));
+  };
+
   useEffect(() => {
     setLoading(true);
     load({ syncFile: true }).catch(console.error);
+    loadPreview().catch(console.error);
   }, [slug]);
 
   useEffect(() => {
@@ -793,19 +809,42 @@ function ProjectDetailView({ slug }: { slug: string }) {
   }, [slug, selectedFile, fileDirty]);
 
   useEffect(() => {
+    const id = window.setInterval(() => loadPreview().catch(console.error), 3000);
+    return () => window.clearInterval(id);
+  }, [slug]);
+
+  useEffect(() => {
     if (detail) {
       setFileContent(detail.files[selectedFile]);
       setFileDirty(false);
     }
   }, [selectedFile, detail]);
 
-  const heartbeat = async () => {
+  const continueWork = async () => {
     setBusy(true);
     try {
       await fetchJson(`/api/projects/${slug}/heartbeat`, { method: "POST" });
       await load({ syncFile: false });
     } finally {
       setBusy(false);
+    }
+  };
+
+  const startPreview = async () => {
+    setPreviewBusy(true);
+    try {
+      setPreview(await fetchJson<ProjectPreviewInfo>(`/api/projects/${slug}/preview/start`, { method: "POST" }));
+    } finally {
+      setPreviewBusy(false);
+    }
+  };
+
+  const stopPreview = async () => {
+    setPreviewBusy(true);
+    try {
+      setPreview(await fetchJson<ProjectPreviewInfo>(`/api/projects/${slug}/preview/stop`, { method: "POST" }));
+    } finally {
+      setPreviewBusy(false);
     }
   };
 
@@ -885,7 +924,7 @@ function ProjectDetailView({ slug }: { slug: string }) {
     window.setTimeout(() => setCopiedCommand(false), 1400);
   };
 
-  const localAppUrl = findLocalAppUrl(detail.files["PROJECT.md"]);
+  const localAppUrl = preview?.url ?? findLocalAppUrl(detail.files["PROJECT.md"]);
   const runtime = projectRuntimeState(detail);
   const activeJobs = detail.jobs.filter((job) => job.status === "queued" || job.status === "running");
   const latestRun = detail.runs[0];
@@ -894,14 +933,15 @@ function ProjectDetailView({ slug }: { slug: string }) {
   const primaryAction =
     detail.build_phase === "initial-build"
       ? { label: "Start initial build", title: "Queue the first local prototype build", onClick: initialBuild }
-      : { label: "Run heartbeat", title: "Queue one working-phase autonomous cycle", onClick: heartbeat };
+      : { label: "Continue dev", title: "Queue one autonomous work cycle for this project", onClick: continueWork };
 
   const saveCadence = async () => {
     setBusy(true);
     try {
+      const projectMarkdown = detail.files["PROJECT.md"].replace(/^## Heartbeat cadence$/m, "## Work cadence");
       const nextProjectMd = replaceMarkdownSection(
-        detail.files["PROJECT.md"],
-        "Heartbeat cadence",
+        projectMarkdown,
+        "Work cadence",
         `stale_after_hours: ${cadenceHours}\nauto_queue_when_stale: ${autoQueueWhenStale ? "true" : "false"}`
       );
       await fetchJson(`/api/projects/${slug}/files/PROJECT.md`, {
@@ -923,11 +963,11 @@ function ProjectDetailView({ slug }: { slug: string }) {
           <div className="button-row">
             {localAppUrl ? (
               <a className="button primary" href={localAppUrl} target="_blank" rel="noreferrer" title="Open local app URL">
-                <ExternalLink size={16} /> App
+                <ExternalLink size={16} /> Preview
               </a>
             ) : (
               <button className="button" disabled title="No local app URL found in PROJECT.md">
-                <ExternalLink size={16} /> App
+                <ExternalLink size={16} /> Preview
               </button>
             )}
             <button className="button" onClick={() => fetchJson(`/api/projects/${slug}/open-folder`, { method: "POST" })} title="Open folder in Finder">
@@ -958,9 +998,6 @@ function ProjectDetailView({ slug }: { slug: string }) {
             <button className="button primary" onClick={primaryAction.onClick} disabled={workBusy} title={primaryAction.title}>
               <PlayCircle size={16} /> {primaryAction.label}
             </button>
-            <button className="button" onClick={heartbeat} disabled={workBusy} title="Queue a working-phase heartbeat">
-              <RefreshCw size={16} /> Heartbeat
-            </button>
             <button className="button" onClick={copyManagerCommand} title="Copy manager Codex command">
               <Terminal size={16} /> {copiedCommand ? "Copied" : detail.codex_thread_id ? "Copy resume command" : "Copy start command"}
             </button>
@@ -977,8 +1014,8 @@ function ProjectDetailView({ slug }: { slug: string }) {
         </article>
         <article className="status-tile">
           <span>Latest run</span>
-          <strong>{latestRun ? latestRun.run_type : "No runs"}</strong>
-          <p>{latestRun ? shortText(latestRun.summary || latestRun.error || `Updated ${timeAgo(latestRun.updated_at)}`, 260) : "Queue an initial build or heartbeat to create a run."}</p>
+          <strong>{latestRun ? runTypeLabel(latestRun.run_type) : "No runs"}</strong>
+          <p>{latestRun ? shortText(latestRun.summary || latestRun.error || `Updated ${timeAgo(latestRun.updated_at)}`, 260) : "Queue an initial build or work cycle to create a run."}</p>
           <RunBadge status={latestRun?.status ?? null} />
         </article>
         <article className="status-tile">
@@ -1021,12 +1058,14 @@ function ProjectDetailView({ slug }: { slug: string }) {
           </div>
         </article>
         <article className="status-tile">
-          <span>Cadence</span>
+          <span>Scheduled work</span>
           <strong>{detail.stale_after_hours}h stale window</strong>
-          <p>{detail.auto_queue_when_stale ? "Auto-queue is enabled." : "Auto-queue is off; work starts from explicit actions."}</p>
-          <Tag>{detail.last_heartbeat_at ? `heartbeat ${timeAgo(detail.last_heartbeat_at)}` : "no heartbeat"}</Tag>
+          <p>{detail.auto_queue_when_stale ? "Auto-queue is enabled." : "Auto-queue is off until cron/scheduling is turned on."}</p>
+          <Tag>{detail.last_heartbeat_at ? `last work ${timeAgo(detail.last_heartbeat_at)}` : "no work cycle yet"}</Tag>
         </article>
       </div>
+
+      <ProjectPreviewPanel preview={preview} busy={previewBusy} onStart={startPreview} onStop={stopPreview} />
 
       <div className="two-column">
         <Panel title="Queue">
@@ -1049,7 +1088,7 @@ function ProjectDetailView({ slug }: { slug: string }) {
           {detail.codex_thread_id && <div className="command-box"><code>{detail.managerExecCommand}</code></div>}
           <div className="cadence-box">
             <label className="field">
-              <span>Stale after hours</span>
+              <span>Schedule after idle hours</span>
               <input
                 type="number"
                 min="1"
@@ -1063,10 +1102,10 @@ function ProjectDetailView({ slug }: { slug: string }) {
                 checked={autoQueueWhenStale}
                 onChange={(event) => setAutoQueueWhenStale(event.target.checked)}
               />
-              Auto-queue when stale
+              Auto-queue scheduled work
             </label>
             <button className="button" type="button" onClick={saveCadence} disabled={busy || cadenceHours < 1}>
-              <Save size={16} /> Save cadence
+              <Save size={16} /> Save schedule
             </button>
           </div>
           {detail.autonomy === "throwaway" && (
@@ -1140,6 +1179,68 @@ function ProjectDetailView({ slug }: { slug: string }) {
         </Panel>
       </div>
     </section>
+  );
+}
+
+function ProjectPreviewPanel(props: {
+  preview: ProjectPreviewInfo | null;
+  busy: boolean;
+  onStart: () => Promise<void>;
+  onStop: () => Promise<void>;
+}) {
+  const preview = props.preview;
+  const status = preview?.status ?? "idle";
+  const canStart = Boolean(preview?.command) && !["starting", "running"].includes(status);
+  const canStop = Boolean(preview?.managed) && ["starting", "running"].includes(status);
+  const badgeStatus = status === "failed" ? "failed" : status === "running" ? "running" : status === "starting" ? "queued" : null;
+
+  return (
+    <Panel title="Inspect local preview">
+      <div className="preview-panel">
+        <div className="preview-main">
+          <div className="meta-row">
+            <RunBadge status={badgeStatus} label={preview ? previewStatusLabel(status) : "loading"} />
+            {preview?.pid && <Tag>pid {preview.pid}</Tag>}
+            {preview?.url && (
+              <a className="url-link" href={preview.url} target="_blank" rel="noreferrer">
+                {preview.url}
+              </a>
+            )}
+          </div>
+          <div className="command-box">
+            <code>{preview?.command ? `cd ${preview.slug ? "projects/" + preview.slug : "<project>"} && ${preview.command}` : "No runnable preview command found yet."}</code>
+          </div>
+          {preview?.instructions.length ? (
+            <SimpleList items={preview.instructions} />
+          ) : (
+            <p className="docs-copy">No local inspection instructions have been written yet.</p>
+          )}
+          {preview?.logs.trim() && (
+            <details className="log-details preview-log">
+              <summary>Show preview output</summary>
+              <pre>{preview.logs.slice(-3200)}</pre>
+            </details>
+          )}
+        </div>
+        <div className="preview-actions">
+          <button className="button primary" type="button" onClick={props.onStart} disabled={props.busy || !canStart}>
+            {props.busy || status === "starting" ? <RefreshCw size={16} className="spin" /> : <PlayCircle size={16} />} {status === "starting" ? "Starting..." : "Start preview"}
+          </button>
+          {preview?.url ? (
+            <a className="button" href={preview.url} target="_blank" rel="noreferrer">
+              <ExternalLink size={16} /> Open
+            </a>
+          ) : (
+            <button className="button" type="button" disabled>
+              <ExternalLink size={16} /> Open
+            </button>
+          )}
+          <button className="button" type="button" onClick={props.onStop} disabled={props.busy || !canStop}>
+            <XCircle size={16} /> Stop
+          </button>
+        </div>
+      </div>
+    </Panel>
   );
 }
 
@@ -1405,7 +1506,7 @@ function RunsView() {
 
 function JobList({ jobs, compact = false }: { jobs: JobRecord[]; compact?: boolean }) {
   if (!jobs.length) {
-    return <EmptyState icon={<ClipboardList size={22} />} title="No jobs" body="Heartbeat and feedback jobs will appear here." />;
+    return <EmptyState icon={<ClipboardList size={22} />} title="No jobs" body="Initial build, feedback, and work-cycle jobs will appear here." />;
   }
 
   return (
@@ -1415,7 +1516,7 @@ function JobList({ jobs, compact = false }: { jobs: JobRecord[]; compact?: boole
           <div className="run-title">
             <RunBadge status={job.status} />
             {job.status === "running" && <span className="live-pill">live</span>}
-            <strong>{job.job_type}</strong>
+            <strong>{runTypeLabel(job.job_type)}</strong>
             <span>{job.project_slug}</span>
             <span>{job.worker_id ? `worker ${job.worker_id}` : "waiting for worker"}</span>
           </div>
@@ -1433,7 +1534,7 @@ function JobList({ jobs, compact = false }: { jobs: JobRecord[]; compact?: boole
 
 function RunList({ runs, compact = false }: { runs: RunRecord[]; compact?: boolean }) {
   if (!runs.length) {
-    return <EmptyState icon={<Activity size={22} />} title="No runs" body="Heartbeat and feedback runs will appear here." />;
+    return <EmptyState icon={<Activity size={22} />} title="No runs" body="Initial build, feedback, and work-cycle runs will appear here." />;
   }
 
   return (
@@ -1442,7 +1543,7 @@ function RunList({ runs, compact = false }: { runs: RunRecord[]; compact?: boole
         <article className="run-card" key={run.id}>
           <div className="run-title">
             <RunBadge status={run.status} />
-            <strong>{run.run_type}</strong>
+            <strong>{runTypeLabel(run.run_type)}</strong>
             <span>{run.project_slug}</span>
             <span>{run.finished_at ? `finished ${timeAgo(run.finished_at)}` : `created ${timeAgo(run.created_at)}`}</span>
             <span>{shortId(run.id)}</span>
@@ -1550,6 +1651,24 @@ function RunBadge({ status, label }: { status: string | null; label?: string }) 
 
 function PhaseBadge({ phase }: { phase: ProjectPhase }) {
   return <span className={`phase-badge ${phase}`}>{phaseTitle(phase)}</span>;
+}
+
+function runTypeLabel(value: string): string {
+  if (value === "heartbeat") return "work cycle";
+  if (value === "initial-build") return "initial build";
+  if (value === "manual-job") return "manual job";
+  if (value === "browser-check") return "browser check";
+  return value;
+}
+
+function previewStatusLabel(value: string): string {
+  if (value === "unavailable") return "no command";
+  if (value === "idle") return "ready";
+  if (value === "starting") return "starting";
+  if (value === "running") return "running";
+  if (value === "stopped") return "stopped";
+  if (value === "failed") return "failed";
+  return value;
 }
 
 function phaseTitle(phase: ProjectPhase): string {
@@ -1666,7 +1785,7 @@ function projectRuntimeState(detail: ProjectDetail): {
   const running = detail.jobs.find((job) => job.status === "running");
   if (running) {
     return {
-      title: `${running.job_type} running`,
+      title: `${runTypeLabel(running.job_type)} running`,
       body: `${running.worker_id ? `Worker ${running.worker_id}` : "A worker"} started this ${timeAgo(running.started_at ?? running.updated_at)}.`,
       badgeStatus: "running",
       badgeLabel: "live"
@@ -1676,7 +1795,7 @@ function projectRuntimeState(detail: ProjectDetail): {
   const queued = detail.jobs.find((job) => job.status === "queued");
   if (queued) {
     return {
-      title: `${queued.job_type} queued`,
+      title: `${runTypeLabel(queued.job_type)} queued`,
       body: "The job is waiting for the local worker to come online and claim it.",
       badgeStatus: "queued",
       badgeLabel: "queued"
@@ -1723,7 +1842,7 @@ function projectRuntimeState(detail: ProjectDetail): {
   if (latest?.status === "succeeded") {
     return {
       title: "Idle",
-      body: `Last ${latest.run_type} succeeded ${timeAgo(latest.finished_at ?? latest.updated_at)}.`,
+      body: `Last ${runTypeLabel(latest.run_type)} succeeded ${timeAgo(latest.finished_at ?? latest.updated_at)}.`,
       badgeStatus: "succeeded",
       badgeLabel: "idle"
     };
