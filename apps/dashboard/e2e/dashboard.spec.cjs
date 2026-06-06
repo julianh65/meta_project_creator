@@ -2,6 +2,7 @@ const { expect, test } = require("@playwright/test");
 
 test("creates a project through the onboarding UI", async ({ page }) => {
   const name = `E2E Throwaway ${Date.now()}`;
+  const slug = name.toLowerCase().replace(/\s+/g, "-");
 
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Personal project swarm" })).toBeVisible();
@@ -23,4 +24,8 @@ test("creates a project through the onboarding UI", async ({ page }) => {
 
   await page.getByRole("link", { name: /^Projects$/ }).click();
   await expect(page.getByRole("link", { name })).toBeVisible();
+
+  await page.request.delete(`/api/projects/${slug}`, {
+    data: { confirmSlug: slug }
+  });
 });

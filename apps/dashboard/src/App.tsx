@@ -19,6 +19,7 @@ import {
   Search,
   Send,
   Terminal,
+  Trash2,
   XCircle
 } from "lucide-react";
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
@@ -221,6 +222,14 @@ function DocsView() {
           </div>
         </Panel>
 
+        <Panel title="Project initialization">
+          <div className="explain-list">
+            <ExplainItem icon={<FileText size={18} />} title="Files first" body="Startup OS writes the four durable Markdown files and optional starter scaffold files into projects/<slug>." />
+            <ExplainItem icon={<Terminal size={18} />} title="Standalone git repo" body="Each project gets a .gitignore, git init on main, local-only git identity, and an initial commit for the generated files." />
+            <ExplainItem icon={<Trash2 size={18} />} title="Throwaway cleanup" body="Projects marked throwaway can be deleted from the dashboard. Normal projects are intentionally protected from this delete path." />
+          </div>
+        </Panel>
+
         <Panel title="Project phases">
           <div className="explain-list">
             <ExplainItem
@@ -340,6 +349,22 @@ function ProjectCard({ project, reload }: { project: ProjectRecord; reload: () =
     }
   };
 
+  const deleteThrowaway = async () => {
+    if (!window.confirm(`Delete throwaway project "${project.name}" and its folder?`)) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await fetchJson(`/api/projects/${project.slug}`, {
+        method: "DELETE",
+        body: JSON.stringify({ confirmSlug: project.slug })
+      });
+      await reload();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <article className="project-card">
       <div className="card-head">
@@ -372,6 +397,11 @@ function ProjectCard({ project, reload }: { project: ProjectRecord; reload: () =
         <button className="button" type="button" onClick={startWork} disabled={busy}>
           <PlayCircle size={15} /> {actionLabel}
         </button>
+        {project.autonomy === "throwaway" && (
+          <button className="button danger" type="button" onClick={deleteThrowaway} disabled={busy || project.agent_status === "queued" || project.agent_status === "running"}>
+            <Trash2 size={15} /> Delete
+          </button>
+        )}
       </div>
     </article>
   );
@@ -637,6 +667,22 @@ function ProjectDetailView({ slug }: { slug: string }) {
     }
   };
 
+  const deleteThrowaway = async () => {
+    if (!detail || !window.confirm(`Delete throwaway project "${detail.name}" and its folder?`)) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await fetchJson(`/api/projects/${slug}`, {
+        method: "DELETE",
+        body: JSON.stringify({ confirmSlug: slug })
+      });
+      window.location.hash = "/projects";
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const submitFeedback = async () => {
     if (!feedback.trim()) return;
     setBusy(true);
@@ -822,6 +868,15 @@ function ProjectDetailView({ slug }: { slug: string }) {
               <Save size={16} /> Save cadence
             </button>
           </div>
+          {detail.autonomy === "throwaway" && (
+            <div className="danger-zone">
+              <strong>Throwaway cleanup</strong>
+              <p>Delete this project folder, runs, jobs, and inbox records.</p>
+              <button className="button danger" type="button" onClick={deleteThrowaway} disabled={busy || detail.agent_status === "queued" || detail.agent_status === "running"}>
+                <Trash2 size={16} /> Delete throwaway
+              </button>
+            </div>
+          )}
         </Panel>
       </div>
 

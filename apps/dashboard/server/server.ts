@@ -94,6 +94,11 @@ app.post("/api/projects", (req, res) => {
   res.status(201).json(project);
 });
 
+app.delete("/api/projects/:slug", (req, res) => {
+  const parsed = z.object({ confirmSlug: z.string().min(1) }).parse(req.body);
+  res.json(storage.deleteThrowawayProject(req.params.slug, parsed.confirmSlug));
+});
+
 app.get("/api/projects/:slug", (req, res) => {
   const detail = storage.getProjectDetail(req.params.slug);
   if (!detail) {

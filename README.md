@@ -124,6 +124,27 @@ The heartbeat prompt also asks Codex to print a short starting plan and brief pr
 
 The project will be created under `projects/<slug>/`. Optional scaffolding can add a small starter codebase based on project type.
 
+## Project Initialization
+
+When a project is created, Startup OS:
+
+- writes `AGENTS.md`, `PROJECT.md`, `QUEUE.md`, and `LOG.md`
+- writes optional starter scaffold files if selected
+- creates a project `.gitignore`
+- runs `git init` on `main`
+- configures local-only git identity as `Startup OS <startup-os@example.local>`
+- creates an initial commit for the generated project files
+- starts the project in `initial-build`
+- leaves the Codex manager thread empty until the first real worker run
+
+No package install, account setup, deployment, or external service call happens during initialization. Those belong in the initial build or Browser/Ops flow.
+
+## Delete Throwaway Projects
+
+Projects marked with autonomy `throwaway` can be deleted from the dashboard. Deletion removes the project folder plus its jobs, runs, and inbox records from SQLite.
+
+Non-throwaway projects are intentionally not deletable through this control. Change the autonomy only if the project really is disposable.
+
 ## Work Manually With Codex
 
 Every generated project is a normal folder. To take over manually:

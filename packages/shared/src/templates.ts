@@ -211,6 +211,14 @@ ${platformPolicy(proposal.type)}
 
 Project created from onboarding. No implementation work has started yet.
 
+## Initialization
+
+- Durable Markdown memory files are created first.
+- Optional starter scaffold files are written when requested.
+- The project folder is initialized as a standalone local git repository on main.
+- Startup OS creates an initial git commit for the generated files.
+- The first real worker run creates the persistent Codex manager thread.
+
 ## Decisions
 
 - Use the four durable Markdown files in this repo as project memory.

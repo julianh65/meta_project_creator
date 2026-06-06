@@ -16,6 +16,7 @@ describe("project onboarding templates", () => {
     assert.match(draft.files["PROJECT.md"], /## Original intent/);
     assert.match(draft.files["PROJECT.md"], /## Build phase\s+initial-build/s);
     assert.match(draft.files["PROJECT.md"], /## Codex manager thread\s+Not started yet\./s);
+    assert.match(draft.files["PROJECT.md"], /## Initialization/);
     assert.match(draft.files["AGENTS.md"], /## Mobile \/ Expo Policy/);
     assert.match(draft.files["QUEUE.md"], /## Browser\/Ops Requests/);
   });

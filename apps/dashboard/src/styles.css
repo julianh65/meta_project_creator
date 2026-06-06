@@ -284,6 +284,7 @@ a {
 .card-head {
   display: flex;
   justify-content: space-between;
+  align-items: flex-start;
   gap: 12px;
 }
 
@@ -566,6 +567,22 @@ a {
 .cadence-box {
   display: grid;
   gap: 10px;
+}
+
+.danger-zone {
+  margin-top: 14px;
+  border: 1px solid #fecdd3;
+  border-radius: 6px;
+  background: #fff1f2;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.danger-zone p {
+  color: var(--red);
+  margin: 0;
+  line-height: 1.4;
 }
 
 .inline-check {

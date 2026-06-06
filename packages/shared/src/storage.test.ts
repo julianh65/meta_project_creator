@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
@@ -37,6 +38,9 @@ describe("StartupStorage", () => {
     assert.equal(fs.existsSync(path.join(project.path, "PROJECT.md")), true);
     assert.equal(fs.existsSync(path.join(project.path, "QUEUE.md")), true);
     assert.equal(fs.existsSync(path.join(project.path, "LOG.md")), true);
+    assert.equal(fs.existsSync(path.join(project.path, ".gitignore")), true);
+    assert.equal(execFileSync("git", ["-C", project.path, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8" }).trim(), "true");
+    assert.equal(execFileSync("git", ["-C", project.path, "status", "--porcelain"], { encoding: "utf8" }).trim(), "");
 
     const detail = storage.getProjectDetail(project.slug);
     assert.match(detail?.queue.now[0]?.text ?? "", /web prototype/);
@@ -89,6 +93,32 @@ describe("StartupStorage", () => {
     const project = storage.createProjectFromDraft(draft);
 
     assert.equal(storage.listRequests({ projectSlug: project.slug, includeDone: true }).length, 0);
+    storage.close();
+  });
+
+  it("deletes only confirmed throwaway projects", () => {
+    const storage = tempStorage();
+    const throwaway = storage.createProjectFromDraft(generateProjectDraft({
+      rawPrompt: "A throwaway web prototype for sketching a local idea.",
+      name: "Delete Me",
+      type: "web",
+      autonomy: "throwaway"
+    }));
+    const normal = storage.createProjectFromDraft(generateProjectDraft({
+      rawPrompt: "A normal web project that should not be deleted casually.",
+      name: "Keep Me",
+      type: "web",
+      autonomy: "normal"
+    }));
+
+    assert.throws(() => storage.deleteThrowawayProject(throwaway.slug, "wrong-slug"), /confirmSlug/);
+    assert.throws(() => storage.deleteThrowawayProject(normal.slug, normal.slug), /Only throwaway/);
+
+    const result = storage.deleteThrowawayProject(throwaway.slug, throwaway.slug);
+    assert.equal(result.slug, throwaway.slug);
+    assert.equal(fs.existsSync(throwaway.path), false);
+    assert.equal(storage.getProjectBySlug(throwaway.slug), null);
+    assert.ok(storage.getProjectBySlug(normal.slug));
     storage.close();
   });
 

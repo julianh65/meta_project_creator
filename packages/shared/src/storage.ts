@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { AppPaths, createAppPaths } from "./paths";
 import {
   allowedProjectFile,
@@ -20,6 +21,7 @@ import {
   JobRecord,
   ParsedQueue,
   ProjectDetail,
+  ProjectDeletionResult,
   ProjectDraft,
   ProjectFileName,
   ProjectAgentStatus,
@@ -40,6 +42,7 @@ export interface CreateProjectOptions {
   scaffold?: boolean;
   runInitialBuild?: boolean;
   runFirstHeartbeat?: boolean;
+  initializeGit?: boolean;
 }
 
 export class StartupStorage {
@@ -304,6 +307,10 @@ export class StartupStorage {
       createScaffold(projectDir, draft.proposal.type, draft.proposal.name);
     }
 
+    if (options.initializeGit ?? true) {
+      initializeProjectRepository(projectDir);
+    }
+
     const project = this.syncProjectFromFiles(slug);
     if (!project) {
       throw new Error("Project was created but could not be synced from Markdown files.");
@@ -314,6 +321,47 @@ export class StartupStorage {
     }
 
     return project;
+  }
+
+  deleteThrowawayProject(slug: string, confirmSlug: string): ProjectDeletionResult {
+    if (slug !== confirmSlug) {
+      throw new Error("Project deletion requires matching confirmSlug.");
+    }
+
+    const project = this.getProjectBySlug(slug);
+    if (!project) {
+      throw new Error(`Unknown project: ${slug}`);
+    }
+    if (project.autonomy !== "throwaway") {
+      throw new Error("Only throwaway projects can be deleted from the dashboard.");
+    }
+
+    const activeJobs = this.listJobs({ projectSlug: slug, includeFinished: false });
+    if (activeJobs.length > 0) {
+      throw new Error("Cannot delete a project while it has queued or running jobs.");
+    }
+
+    const projectPath = assertProjectPathIsSafe(project.path, this.paths.projectsDir);
+    const deletedAt = nowIso();
+    const deletedFolder = fs.existsSync(projectPath);
+    if (deletedFolder) {
+      fs.rmSync(projectPath, { recursive: true, force: true });
+    }
+
+    const cleanup = this.db.transaction(() => {
+      this.db.prepare("DELETE FROM jobs WHERE project_slug = ?").run(slug);
+      this.db.prepare("DELETE FROM runs WHERE project_slug = ?").run(slug);
+      this.db.prepare("DELETE FROM requests WHERE project_slug = ?").run(slug);
+      this.db.prepare("DELETE FROM projects WHERE slug = ?").run(slug);
+    });
+    cleanup();
+
+    return {
+      slug,
+      path: projectPath,
+      deleted_at: deletedAt,
+      deleted_folder: deletedFolder
+    };
   }
 
   readProjectFiles(slug: string): Record<ProjectFileName, string> {
@@ -956,6 +1004,93 @@ function readIfExists(filePath: string): string {
     return "";
   }
   return fs.readFileSync(filePath, "utf8");
+}
+
+function initializeProjectRepository(projectDir: string): void {
+  ensureProjectGitignore(projectDir);
+  const logPath = path.join(projectDir, "LOG.md");
+
+  try {
+    try {
+      runGit(projectDir, ["init", "-b", "main"]);
+    } catch {
+      runGit(projectDir, ["init"]);
+      runGit(projectDir, ["branch", "-M", "main"]);
+    }
+
+    runGit(projectDir, ["config", "user.name", "Startup OS"]);
+    runGit(projectDir, ["config", "user.email", "startup-os@example.local"]);
+    fs.writeFileSync(
+      logPath,
+      appendLogEntry(readIfExists(logPath), "Initialized local git repository on main for project work."),
+      "utf8"
+    );
+
+    runGit(projectDir, ["add", "."]);
+    const status = runGit(projectDir, ["status", "--porcelain"]);
+    if (status.trim()) {
+      runGit(projectDir, ["commit", "-m", "Initial project scaffold"]);
+    }
+  } catch (error) {
+    fs.writeFileSync(
+      logPath,
+      appendLogEntry(readIfExists(logPath), `Git initialization failed: ${formatCommandError(error)}`),
+      "utf8"
+    );
+  }
+}
+
+function ensureProjectGitignore(projectDir: string): void {
+  const gitignorePath = path.join(projectDir, ".gitignore");
+  const additions = [
+    "node_modules/",
+    "dist/",
+    "build/",
+    ".DS_Store",
+    ".env",
+    ".env.*",
+    "*.log",
+    ".startup-os/prompts/"
+  ];
+  const existing = readIfExists(gitignorePath);
+  const existingLines = new Set(existing.split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
+  const missing = additions.filter((line) => !existingLines.has(line));
+  if (!existing.trim()) {
+    fs.writeFileSync(gitignorePath, `${additions.join("\n")}\n`, "utf8");
+    return;
+  }
+  if (missing.length) {
+    fs.writeFileSync(gitignorePath, `${existing.trimEnd()}\n${missing.join("\n")}\n`, "utf8");
+  }
+}
+
+function runGit(projectDir: string, args: string[]): string {
+  return execFileSync("git", args, {
+    cwd: projectDir,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+}
+
+function formatCommandError(error: unknown): string {
+  if (typeof error === "object" && error && "stderr" in error) {
+    const stderr = (error as { stderr?: Buffer | string }).stderr;
+    const value = Buffer.isBuffer(stderr) ? stderr.toString("utf8") : stderr;
+    if (value?.trim()) {
+      return value.trim().replace(/\s+/g, " ").slice(0, 240);
+    }
+  }
+  return error instanceof Error ? error.message.replace(/\s+/g, " ").slice(0, 240) : String(error);
+}
+
+function assertProjectPathIsSafe(projectPath: string, projectsDir: string): string {
+  const root = path.resolve(projectsDir);
+  const resolved = path.resolve(projectPath);
+  const relative = path.relative(root, resolved);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`Refusing to delete unsafe project path: ${projectPath}`);
+  }
+  return resolved;
 }
 
 function classifyNeedsJulian(text: string): RequestType {

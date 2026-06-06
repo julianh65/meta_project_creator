@@ -234,6 +234,13 @@ export interface ProjectDetail extends ProjectRecord {
   managerExecCommand: string;
 }
 
+export interface ProjectDeletionResult {
+  slug: string;
+  path: string;
+  deleted_at: string;
+  deleted_folder: boolean;
+}
+
 export interface DashboardSummary {
   worker: WorkerStatus;
   activeProjects: number;
