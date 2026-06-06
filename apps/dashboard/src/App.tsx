@@ -54,6 +54,36 @@ const navItems = [
 const activeRequestStatuses = ["open", "queued", "running", "needs_julian", "failed"];
 const archivedRequestStatuses = ["approved", "rejected", "done", "stale"];
 
+const promptStarters: Array<{
+  label: string;
+  name: string;
+  type: ProjectType;
+  autonomy: AutonomyLevel;
+  prompt: string;
+}> = [
+  {
+    label: "Web prototype",
+    name: "Local Web Prototype",
+    type: "web",
+    autonomy: "normal",
+    prompt: "A local web app prototype for exploring a focused product idea. Build the first version with local fixtures, no accounts, no deployment, and a clear main flow I can open and react to."
+  },
+  {
+    label: "Research helper",
+    name: "Research Helper",
+    type: "research",
+    autonomy: "careful",
+    prompt: "A local research workflow that turns a messy topic into useful notes, sources, summaries, and next questions. Keep external actions approval-gated and write durable project memory."
+  },
+  {
+    label: "Throwaway sketch",
+    name: "Throwaway Sketch",
+    type: "web",
+    autonomy: "throwaway",
+    prompt: "A quick throwaway local prototype to test one interaction idea. Keep it small, use mock data, and make it easy to delete later."
+  }
+];
+
 type DraftInput = {
   rawPrompt: string;
   name: string;
@@ -351,6 +381,9 @@ function DocsView() {
 function ProjectsView() {
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
+  const [phaseFilter, setPhaseFilter] = useState("all");
+  const [agentFilter, setAgentFilter] = useState("all");
 
   const load = async () => {
     setProjects(await fetchJson<ProjectRecord[]>("/api/projects"));
@@ -360,6 +393,26 @@ function ProjectsView() {
   useEffect(() => {
     load().catch(console.error);
   }, []);
+
+  const filteredProjects = projects.filter((project) => {
+    const text = `${project.name} ${project.slug} ${project.one_liner} ${project.current_now_task ?? ""}`.toLowerCase();
+    const matchesQuery = !query.trim() || text.includes(query.trim().toLowerCase());
+    const matchesPhase = phaseFilter === "all" || project.build_phase === phaseFilter;
+    const matchesAgent = agentFilter === "all" || project.agent_status === agentFilter;
+    return matchesQuery && matchesPhase && matchesAgent;
+  });
+  const phaseCounts = {
+    all: projects.length,
+    "initial-build": projects.filter((project) => project.build_phase === "initial-build").length,
+    working: projects.filter((project) => project.build_phase === "working").length
+  };
+  const agentCounts = {
+    all: projects.length,
+    idle: projects.filter((project) => project.agent_status === "idle").length,
+    queued: projects.filter((project) => project.agent_status === "queued").length,
+    running: projects.filter((project) => project.agent_status === "running").length,
+    failed: projects.filter((project) => project.agent_status === "failed").length
+  };
 
   return (
     <section className="page-stack">
@@ -372,14 +425,40 @@ function ProjectsView() {
           </a>
         }
       />
+      <div className="project-toolbar">
+        <label className="search-field">
+          <Search size={16} />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search projects, tasks, slugs..." />
+        </label>
+        <div className="toolbar-filters">
+          <div className="tab-row">
+            {(["all", "initial-build", "working"] as const).map((phase) => (
+              <button className={phaseFilter === phase ? "tab active" : "tab"} key={phase} onClick={() => setPhaseFilter(phase)}>
+                <span>{phase === "all" ? "all phases" : phaseTitle(phase)}</span>
+                <b>{phaseCounts[phase]}</b>
+              </button>
+            ))}
+          </div>
+          <div className="tab-row">
+            {(["all", "idle", "queued", "running", "failed"] as const).map((agent) => (
+              <button className={agentFilter === agent ? "tab active" : "tab"} key={agent} onClick={() => setAgentFilter(agent)}>
+                <span>{agent === "all" ? "all agents" : agent}</span>
+                <b>{agentCounts[agent]}</b>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
       {loading ? (
         <Loading title="Loading projects" />
-      ) : projects.length ? (
+      ) : filteredProjects.length ? (
         <div className="project-grid">
-          {projects.map((project) => (
+          {filteredProjects.map((project) => (
             <ProjectCard project={project} reload={load} key={project.id} />
           ))}
         </div>
+      ) : projects.length ? (
+        <EmptyState icon={<Search size={26} />} title="No matching projects" body="Adjust the search or filters." />
       ) : (
         <EmptyState icon={<FolderKanban size={26} />} title="No projects synced" body="Folders created under projects/ will appear here." />
       )}
@@ -448,7 +527,7 @@ function ProjectCard({ project, reload }: { project: ProjectRecord; reload: () =
           <ExternalLink size={15} /> Open
         </a>
         <button className="button" type="button" onClick={startWork} disabled={busy}>
-          <PlayCircle size={15} /> {actionLabel}
+          {busy ? <RefreshCw size={15} className="spin" /> : <PlayCircle size={15} />} {busy ? "Queueing..." : actionLabel}
         </button>
         {project.autonomy === "throwaway" && (
           <button className="button danger" type="button" onClick={deleteThrowaway} disabled={busy || project.agent_status === "queued" || project.agent_status === "running"}>
@@ -505,21 +584,49 @@ function NewProjectView() {
     }
   };
 
+  const applyStarter = (starter: (typeof promptStarters)[number]) => {
+    setInput({
+      ...input,
+      rawPrompt: starter.prompt,
+      name: input.name || starter.name,
+      type: starter.type,
+      autonomy: starter.autonomy
+    });
+  };
+
   return (
     <section className="page-stack">
       <Header eyebrow="Onboarding" title="Create from a messy prompt" />
-      <form className="editor-panel" onSubmit={generate}>
-        <label className="field full">
-          <span>Describe the project however you want</span>
-          <textarea
-            className="big-textarea"
-            value={input.rawPrompt}
-            onChange={(event) => setInput({ ...input, rawPrompt: event.target.value })}
-            placeholder="Paste the long messy idea dump here..."
-            required
-          />
-        </label>
-        <div className="form-grid">
+      <form className="onboarding-layout" onSubmit={generate}>
+        <section className="editor-panel prompt-panel">
+          <div className="panel-heading">
+            <span className="section-kicker">Idea</span>
+            <strong>Project brief</strong>
+          </div>
+          <label className="field full">
+            <span>Describe the project however you want</span>
+            <textarea
+              className="big-textarea"
+              value={input.rawPrompt}
+              onChange={(event) => setInput({ ...input, rawPrompt: event.target.value })}
+              placeholder="Paste the long messy idea dump here..."
+              required
+            />
+          </label>
+          <div className="starter-grid">
+            {promptStarters.map((starter) => (
+              <button className="starter-button" type="button" key={starter.label} onClick={() => applyStarter(starter)}>
+                <strong>{starter.label}</strong>
+                <span>{starter.type} / {starter.autonomy}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+        <section className="editor-panel setup-panel">
+          <div className="panel-heading">
+            <span className="section-kicker">Setup</span>
+            <strong>Project metadata</strong>
+          </div>
           <TextField label="Name" value={input.name} onChange={(name) => setInput({ ...input, name })} />
           <label className="field">
             <span>Project type</span>
@@ -546,12 +653,20 @@ function NewProjectView() {
           <TextField label="Preferred stack" value={input.preferredStack} onChange={(preferredStack) => setInput({ ...input, preferredStack })} />
           <TextField label="Things to avoid" value={input.thingsToAvoid} onChange={(thingsToAvoid) => setInput({ ...input, thingsToAvoid })} />
           <TextField label="Vibe/style notes" value={input.vibeNotes} onChange={(vibeNotes) => setInput({ ...input, vibeNotes })} />
-        </div>
-        <div className="button-row">
-          <button className="button primary" type="submit" disabled={busy || !input.rawPrompt.trim()}>
-            <Search size={16} /> Generate proposal
+          <div className="create-options">
+            <label className="inline-check option-row">
+              <input type="checkbox" checked={scaffold} onChange={(event) => setScaffold(event.target.checked)} />
+              <span>Scaffold starter code</span>
+            </label>
+            <label className="inline-check option-row">
+              <input type="checkbox" checked={runInitialBuild} onChange={(event) => setRunInitialBuild(event.target.checked)} />
+              <span>Queue initial build after create</span>
+            </label>
+          </div>
+          <button className="button primary wide-button" type="submit" disabled={busy || !input.rawPrompt.trim()}>
+            {busy ? <RefreshCw size={16} className="spin" /> : <Search size={16} />} {busy ? "Generating..." : "Generate proposal"}
           </button>
-        </div>
+        </section>
       </form>
 
       {draft && (
@@ -559,9 +674,7 @@ function NewProjectView() {
           draft={draft}
           setDraft={setDraft}
           scaffold={scaffold}
-          setScaffold={setScaffold}
           runInitialBuild={runInitialBuild}
-          setRunInitialBuild={setRunInitialBuild}
           create={create}
           busy={busy}
         />
@@ -575,9 +688,7 @@ function ProposalEditor(props: {
   draft: ProjectDraft;
   setDraft: (draft: ProjectDraft) => void;
   scaffold: boolean;
-  setScaffold: (value: boolean) => void;
   runInitialBuild: boolean;
-  setRunInitialBuild: (value: boolean) => void;
   create: () => Promise<void>;
   busy: boolean;
 }) {
@@ -623,9 +734,9 @@ function ProposalEditor(props: {
           <span>First task</span>
           <textarea value={proposal.firstTask} onChange={(event) => updateProposal("firstTask", event.target.value)} />
         </label>
-        <div className="toggle-row">
-          <label><input type="checkbox" checked={props.scaffold} onChange={(event) => props.setScaffold(event.target.checked)} /> Scaffold starter code</label>
-          <label><input type="checkbox" checked={props.runInitialBuild} onChange={(event) => props.setRunInitialBuild(event.target.checked)} /> Queue initial build</label>
+        <div className="meta-row">
+          <Tag>{props.scaffold ? "scaffold starter" : "no scaffold"}</Tag>
+          <Tag>{props.runInitialBuild ? "initial build queued on create" : "manual start after create"}</Tag>
         </div>
       </Panel>
 
@@ -640,7 +751,7 @@ function ProposalEditor(props: {
         </div>
         <div className="button-row">
           <button className="button primary" type="button" onClick={props.create} disabled={props.busy}>
-            <CheckCircle2 size={16} /> Create project
+            {props.busy ? <RefreshCw size={16} className="spin" /> : <CheckCircle2 size={16} />} {props.busy ? "Creating..." : "Create project"}
           </button>
         </div>
       </Panel>
@@ -658,6 +769,7 @@ function ProjectDetailView({ slug }: { slug: string }) {
   const [cadenceHours, setCadenceHours] = useState(168);
   const [autoQueueWhenStale, setAutoQueueWhenStale] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [copiedCommand, setCopiedCommand] = useState(false);
 
   const load = async (options: { syncFile?: boolean } = {}) => {
     const data = await fetchJson<ProjectDetail>(`/api/projects/${slug}`);
@@ -766,6 +878,13 @@ function ProjectDetailView({ slug }: { slug: string }) {
   };
 
   if (loading || !detail) return <Loading title="Loading project" />;
+
+  const copyManagerCommand = async () => {
+    await navigator.clipboard?.writeText(detail.managerCommand);
+    setCopiedCommand(true);
+    window.setTimeout(() => setCopiedCommand(false), 1400);
+  };
+
   const localAppUrl = findLocalAppUrl(detail.files["PROJECT.md"]);
   const runtime = projectRuntimeState(detail);
   const activeJobs = detail.jobs.filter((job) => job.status === "queued" || job.status === "running");
@@ -842,8 +961,8 @@ function ProjectDetailView({ slug }: { slug: string }) {
             <button className="button" onClick={heartbeat} disabled={workBusy} title="Queue a working-phase heartbeat">
               <RefreshCw size={16} /> Heartbeat
             </button>
-            <button className="button" onClick={() => navigator.clipboard?.writeText(detail.managerCommand)} title="Copy manager Codex command">
-              <Terminal size={16} /> {detail.codex_thread_id ? "Copy resume command" : "Copy start command"}
+            <button className="button" onClick={copyManagerCommand} title="Copy manager Codex command">
+              <Terminal size={16} /> {copiedCommand ? "Copied" : detail.codex_thread_id ? "Copy resume command" : "Copy start command"}
             </button>
           </div>
         </aside>
@@ -866,8 +985,8 @@ function ProjectDetailView({ slug }: { slug: string }) {
           <span>Manager thread</span>
           <strong>{detail.codex_thread_id ? shortId(detail.codex_thread_id) : "Not started"}</strong>
           <p>{detail.codex_thread_id ? "Worker turns resume this same Codex session." : "Start initial build to create the persistent manager session."}</p>
-          <button className="button" type="button" onClick={() => navigator.clipboard?.writeText(detail.managerCommand)}>
-            <Terminal size={16} /> Copy command
+          <button className="button" type="button" onClick={copyManagerCommand}>
+            <Terminal size={16} /> {copiedCommand ? "Copied" : "Copy command"}
           </button>
         </article>
         <article className="status-tile">
@@ -963,19 +1082,27 @@ function ProjectDetailView({ slug }: { slug: string }) {
       </div>
 
       <Panel title="Project files">
-        <div className="tab-row">
-          {projectFiles.map((file) => (
-            <button className={selectedFile === file ? "tab active" : "tab"} key={file} onClick={() => setSelectedFile(file)}>
-              <FileText size={15} /> {file}
+        <div className="file-toolbar">
+          <div className="tab-row">
+            {projectFiles.map((file) => (
+              <button className={selectedFile === file ? "tab active" : "tab"} key={file} onClick={() => setSelectedFile(file)}>
+                <FileText size={15} /> {file}
+              </button>
+            ))}
+          </div>
+          <div className="button-row">
+            <Tag>{fileDirty ? "unsaved changes" : "saved"}</Tag>
+            <button className="button primary" onClick={saveFile} disabled={busy || !fileDirty}>
+              <Save size={16} /> Save {selectedFile}
             </button>
-          ))}
+          </div>
         </div>
         <textarea className="code-editor" value={fileContent} onChange={(event) => {
           setFileContent(event.target.value);
           setFileDirty(true);
         }} />
         <div className="button-row">
-          <button className="button primary" onClick={saveFile} disabled={busy}>
+          <button className="button primary" onClick={saveFile} disabled={busy || !fileDirty}>
             <Save size={16} /> Save {selectedFile}
           </button>
         </div>
