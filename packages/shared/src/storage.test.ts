@@ -37,12 +37,16 @@ describe("StartupStorage", () => {
 
     const detail = storage.getProjectDetail(project.slug);
     assert.match(detail?.queue.now[0]?.text ?? "", /web prototype/);
-    assert.equal(detail?.requests.some((request) => request.type === "needs_julian"), true);
+    assert.equal(detail?.requests.some((request) => request.title.includes("external side effects")), false);
 
     storage.updateProjectFile(
       project.slug,
       "QUEUE.md",
-      appendQueueItem(detail!.files["QUEUE.md"], "browserOps", "Set up a test account")
+      appendQueueItem(
+        appendQueueItem(detail!.files["QUEUE.md"], "browserOps", "Set up a test account"),
+        "needsJulian",
+        "Julian decide whether auth should be fake or real."
+      )
     );
     const requests = storage.listRequests({ projectSlug: project.slug, includeDone: true });
     assert.equal(requests.some((request) => request.type === "account_setup"), true);

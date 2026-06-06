@@ -81,6 +81,12 @@ It should then work on the current `QUEUE.md > Now` item, or choose another usef
 
 Heartbeats are explicit in v1. Clicking `Heartbeat` queues a job. The worker must be online to execute it.
 
+## Progress Updates
+
+When the worker claims a job, it writes the current project task and the planned work loop into the run log. While a real command is running, the worker appends periodic `Still running...` updates and keeps the job heartbeat fresh so the dashboard can show that work is live.
+
+The heartbeat prompt also asks Codex to print a short starting plan and brief progress updates as it completes meaningful steps. The quality of those updates depends on the configured command/agent, but the worker-level live status does not.
+
 ## Create A Project
 
 1. Open the dashboard.

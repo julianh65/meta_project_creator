@@ -542,6 +542,10 @@ Act on this response in one scoped work cycle. If no code change is needed, upda
       .run(logs, updated, runId);
   }
 
+  touchJob(jobId: string): void {
+    this.db.prepare("UPDATE jobs SET updated_at = ? WHERE id = ?").run(nowIso(), jobId);
+  }
+
   completeJob(jobId: string, summary: string, filesChanged = ""): RunRecord {
     const job = this.getJob(jobId);
     if (!job) {
@@ -800,14 +804,14 @@ function classifyBrowserOps(text: string): RequestType {
 }
 
 function shouldSurfaceNeedsJulian(text: string): boolean {
-  if (/none yet|review the first prototype direction|confirm whether the mvp direction/i.test(text)) {
+  if (/none yet|review the first prototype direction|confirm whether the mvp direction|approve any external side effects before the agent attempts them/i.test(text)) {
     return false;
   }
   return /julian|approve|approval|decide|decision|choose|question|blocked|blocker|secret|api key|token|captcha|login|2fa|payment|paid|billing|deploy|production|dns|domain|account|review/i.test(text);
 }
 
 function shouldSurfaceBrowserOps(text: string): boolean {
-  if (/none yet/i.test(text)) {
+  if (/none yet|may be needed; queue browser\/ops handoff before use/i.test(text)) {
     return false;
   }
   return /browser|ops|account|signup|sign up|login|captcha|2fa|payment|billing|card|dns|domain|deploy|post|email|service|verification/i.test(text);

@@ -17,6 +17,13 @@ Run one autonomous work cycle.
 If QUEUE.md has a Now item, work on it.
 Otherwise choose a useful next task for the MVP.
 
+At the start, write a short update with:
+- what task you are taking
+- what you plan to change
+- what check you expect to run
+
+If the work takes a while, print brief progress updates as you finish meaningful steps.
+
 You may edit code, run commands, inspect the local UI, use search/browser tools if available, and update project files.
 
 Keep the change scoped and useful. Prefer something demonstrable.
@@ -184,7 +191,6 @@ ${rawPrompt}
 
 function renderQueueMd(proposal: ProjectProposal): string {
   const browserOps = proposal.externalDependencies.neededNow
-    .concat(proposal.externalDependencies.neededSoon)
     .filter((item) => /account|login|captcha|payment|dns|domain|post|email|deploy|service/i.test(item));
 
   return `# Queue

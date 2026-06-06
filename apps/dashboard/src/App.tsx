@@ -106,6 +106,9 @@ export function App() {
         <div className="worker-card">
           <StatusPill status={summary?.worker.is_online ? "online" : "offline"} />
           <span>{summary?.worker.last_seen_at ? timeAgo(summary.worker.last_seen_at) : "never seen"}</span>
+          {summary?.worker.current_job_id && (
+            <span className="live-line">running {summary.worker.current_job_id.slice(0, 8)}</span>
+          )}
         </div>
       </aside>
 
@@ -228,6 +231,7 @@ function DocsView() {
           <div className="explain-list">
             <ExplainItem icon={<ClipboardList size={18} />} title="Jobs" body="Live queue state: queued, running, succeeded, failed, or interrupted." />
             <ExplainItem icon={<Activity size={18} />} title="Runs" body="Historical execution records with prompt, logs, summary, errors, and timestamps." />
+            <ExplainItem icon={<RefreshCw size={18} />} title="Progress updates" body="When a worker claims a job it logs the current task and plan. While a real command runs, it keeps appending still-running updates so you can tell the agent is live." />
             <ExplainItem icon={<Inbox size={18} />} title="Inbox" body="Only surfaced human decisions, blockers, approvals, and external-action requests should show here." />
           </div>
         </Panel>
@@ -737,7 +741,7 @@ function ProjectDetailView({ slug }: { slug: string }) {
 
       <div className="two-column">
         <Panel title="Recent runs">
-          <RunList runs={detail.runs} compact />
+          <RunList runs={detail.runs.slice(0, 3)} />
         </Panel>
         <Panel title="Inbox items">
           {detail.requests.length ? (
@@ -971,17 +975,17 @@ function JobList({ jobs, compact = false }: { jobs: JobRecord[]; compact?: boole
         <article className="job-card" key={job.id}>
           <div className="run-title">
             <RunBadge status={job.status} />
+            {job.status === "running" && <span className="live-pill">live</span>}
             <strong>{job.job_type}</strong>
             <span>{job.project_slug}</span>
             <span>{job.worker_id ? `worker ${job.worker_id}` : "waiting for worker"}</span>
           </div>
-          {!compact && (
-            <p>
-              Created {timeAgo(job.created_at)}
-              {job.started_at ? `, started ${timeAgo(job.started_at)}` : ""}
-              {job.finished_at ? `, finished ${timeAgo(job.finished_at)}` : ""}
-            </p>
-          )}
+          <p>
+            Created {timeAgo(job.created_at)}
+            {job.started_at ? `, started ${timeAgo(job.started_at)}` : ""}
+            {job.finished_at ? `, finished ${timeAgo(job.finished_at)}` : ""}
+          </p>
+          {!compact && <p className="job-prompt">{shortText(job.prompt, 240)}</p>}
         </article>
       ))}
     </div>
@@ -1183,6 +1187,11 @@ function requestStats(items: RequestRecord[]) {
     approvals: items.filter((item) => requestMatchesFilter(item, "approvals")).length,
     archive: items.filter(isArchivedRequest).length
   };
+}
+
+function shortText(value: string, limit: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > limit ? `${normalized.slice(0, limit - 3)}...` : normalized;
 }
 
 function findLocalAppUrl(markdown: string): string {

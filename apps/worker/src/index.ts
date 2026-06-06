@@ -8,7 +8,9 @@ const workerId = `local-${os.hostname()}-${process.pid}`;
 const storage = new StartupStorage();
 const pollMs = Number(process.env.STARTUP_OS_WORKER_POLL_MS ?? "2500");
 const heartbeatMs = Number(process.env.STARTUP_OS_WORKER_HEARTBEAT_MS ?? "5000");
+const jobProgressMs = Math.max(5000, Number(process.env.STARTUP_OS_JOB_PROGRESS_SECONDS ?? "30") * 1000);
 let shuttingDown = false;
+let currentJobId: string | null = null;
 
 console.log(`Startup OS worker ${workerId} starting`);
 const interrupted = storage.markInterruptedJobs(Number(process.env.STARTUP_OS_INTERRUPTED_AFTER_MINUTES ?? "10"));
@@ -17,7 +19,7 @@ if (interrupted > 0) {
 }
 
 const heartbeatTimer = setInterval(() => {
-  storage.recordWorkerHeartbeat(workerId);
+  storage.recordWorkerHeartbeat(workerId, currentJobId);
 }, heartbeatMs);
 
 process.on("SIGINT", shutdown);
@@ -31,11 +33,13 @@ async function mainLoop(): Promise<void> {
   while (!shuttingDown) {
     const job = storage.claimNextJob(workerId);
     if (job) {
+      currentJobId = job.id;
       await executeJob(job).catch((error: unknown) => {
         const message = error instanceof Error ? error.stack ?? error.message : String(error);
         storage.failJob(job.id, "failed", message);
       });
-      storage.recordWorkerHeartbeat(workerId);
+      currentJobId = null;
+      storage.recordWorkerHeartbeat(workerId, null);
       continue;
     }
     await sleep(pollMs);
@@ -54,7 +58,11 @@ async function executeJob(job: JobRecord): Promise<void> {
 
   storage.appendRunLogs(
     job.run_id,
-    `[worker] Claimed ${job.job_type} job ${job.id}\n[worker] Project: ${project.path}\n[worker] Prompt file: ${promptFile}\n`
+    `[worker] Claimed ${job.job_type} job ${job.id}\n` +
+      `[worker] Project: ${project.path}\n` +
+      `[worker] Current task: ${project.current_now_task ?? "No QUEUE.md > Now item found"}\n` +
+      `[worker] Plan: read project files, run one scoped work cycle, then update QUEUE.md and LOG.md.\n` +
+      `[worker] Prompt file: ${promptFile}\n`
   );
 
   if (dryRun) {
@@ -63,6 +71,7 @@ async function executeJob(job: JobRecord): Promise<void> {
       "[worker] Dry-run mode. Set STARTUP_OS_DRY_RUN=false and CODEX_COMMAND_TEMPLATE to execute Codex.\n"
     );
     await sleep(350);
+    storage.appendRunLogs(job.run_id, "[worker] Progress: dry-run job finished; no Codex command was executed.\n");
     storage.completeJob(
       job.id,
       "Dry run completed. The job was claimed, the prompt was persisted, and no external command was executed."
@@ -78,7 +87,7 @@ async function executeJob(job: JobRecord): Promise<void> {
   });
 
   storage.appendRunLogs(job.run_id, `[worker] Executing: ${command}\n`);
-  const result = await runShellCommand(command, project.path, (chunk) => {
+  const result = await runShellCommand(command, project.path, job, (chunk) => {
     storage.appendRunLogs(job.run_id, chunk);
   });
 
@@ -123,9 +132,18 @@ function shellQuote(value: string): string {
 function runShellCommand(
   command: string,
   cwd: string,
+  job: JobRecord,
   onOutput: (chunk: string) => void
 ): Promise<{ code: number | null }> {
   return new Promise((resolve) => {
+    const startedAt = Date.now();
+    const progressTimer = setInterval(() => {
+      const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
+      storage.touchJob(job.id);
+      storage.recordWorkerHeartbeat(workerId, job.id);
+      onOutput(`[worker] Still running ${job.job_type} job after ${elapsedSeconds}s. Waiting for command output or completion.\n`);
+    }, jobProgressMs);
+
     const child = spawn(command, {
       cwd,
       shell: true,
@@ -134,7 +152,11 @@ function runShellCommand(
 
     child.stdout.on("data", (data: Buffer) => onOutput(data.toString()));
     child.stderr.on("data", (data: Buffer) => onOutput(data.toString()));
-    child.on("close", (code) => resolve({ code }));
+    child.on("close", (code) => {
+      clearInterval(progressTimer);
+      storage.touchJob(job.id);
+      resolve({ code });
+    });
   });
 }
 
@@ -145,7 +167,7 @@ function sleep(ms: number): Promise<void> {
 function shutdown(): void {
   shuttingDown = true;
   clearInterval(heartbeatTimer);
-  storage.recordWorkerHeartbeat(workerId);
+  storage.recordWorkerHeartbeat(workerId, currentJobId);
   storage.close();
   process.exit(0);
 }

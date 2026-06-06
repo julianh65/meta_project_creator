@@ -140,12 +140,14 @@ app.put("/api/projects/:slug/files/:file", (req, res) => {
 });
 
 app.get("/api/inbox", (req, res) => {
+  storage.syncProjectsFromFiles();
   const typesParam = typeof req.query.types === "string" ? req.query.types : "";
   const types = typesParam ? typesParam.split(",") : undefined;
   res.json(storage.listRequests({ types: types as never, includeDone: req.query.includeDone === "true" }));
 });
 
 app.get("/api/ops", (_req, res) => {
+  storage.syncProjectsFromFiles();
   res.json(
     storage.listRequests({
       types: ["browser_ops", "account_setup", "captcha_needed", "login_needed", "payment_needed"],
