@@ -33,6 +33,7 @@ import {
   RunRecord,
   RunStatus,
   RunType,
+  WORKER_VERSION,
   WorkerStatus
 } from "./types";
 
@@ -197,7 +198,8 @@ export class StartupStorage {
     const project = parseProjectMarkdown(slug, projectDir, files, existing);
     this.upsertProject(project);
     this.syncRequestsFromQueue(project, parseQueue(files["QUEUE.md"] ?? ""));
-    return project;
+    this.reconcileProjectAgentState(slug);
+    return this.getProjectBySlug(slug, false) ?? project;
   }
 
   getDashboardSummary(): DashboardSummary {
@@ -251,7 +253,9 @@ export class StartupStorage {
   }
 
   getProjectDetail(slug: string): ProjectDetail | null {
-    const project = this.syncProjectFromFiles(slug) ?? this.getProjectBySlug(slug);
+    this.syncProjectFromFiles(slug);
+    this.reconcileProjectAgentState(slug);
+    const project = this.getProjectBySlug(slug, false);
     if (!project) {
       return null;
     }
@@ -280,6 +284,7 @@ export class StartupStorage {
   getProjectBySlug(slug: string, sync = true): ProjectRecord | null {
     if (sync) {
       this.syncProjectFromFiles(slug);
+      this.reconcileProjectAgentState(slug);
     }
     const row = this.db.prepare("SELECT * FROM projects WHERE slug = ?").get(slug) as
       | ProjectRecord
@@ -810,20 +815,21 @@ Act on this response in one scoped work cycle. If no code change is needed, upda
     return jobs.length;
   }
 
-  recordWorkerHeartbeat(workerId: string, currentJobId: string | null = null): WorkerStatus {
+  recordWorkerHeartbeat(workerId: string, currentJobId: string | null = null, version = WORKER_VERSION): WorkerStatus {
     const now = nowIso();
     this.db
       .prepare(
         `INSERT INTO worker_status (id, worker_id, status, last_seen_at, current_job_id, version, updated_at)
-         VALUES ('local-worker', ?, 'online', ?, ?, '0.1.0', ?)
+         VALUES ('local-worker', ?, 'online', ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            worker_id = excluded.worker_id,
            status = 'online',
            last_seen_at = excluded.last_seen_at,
            current_job_id = excluded.current_job_id,
+           version = excluded.version,
            updated_at = excluded.updated_at`
       )
-      .run(workerId, now, currentJobId, now);
+      .run(workerId, now, currentJobId, version, now);
     return this.getWorkerStatus();
   }
 
@@ -904,6 +910,42 @@ Act on this response in one scoped work cycle. If no code change is needed, upda
         project.stale_after_hours,
         project.auto_queue_when_stale ? 1 : 0
       );
+  }
+
+  private reconcileProjectAgentState(slug: string): void {
+    const project = this.db.prepare("SELECT * FROM projects WHERE slug = ?").get(slug) as
+      | ProjectRecord
+      | undefined;
+    if (!project || !["queued", "running"].includes(project.agent_status)) {
+      return;
+    }
+
+    const activeJob = this.db
+      .prepare("SELECT id, run_id, status FROM jobs WHERE project_slug = ? AND status IN ('queued','running') ORDER BY updated_at DESC LIMIT 1")
+      .get(slug) as Pick<JobRecord, "id" | "run_id" | "status"> | undefined;
+    if (activeJob) {
+      const nextStatus = activeJob.status === "running" ? "running" : "queued";
+      this.db
+        .prepare("UPDATE projects SET agent_status = ?, active_turn_id = ?, updated_at = ? WHERE slug = ?")
+        .run(nextStatus, activeJob.run_id, nowIso(), slug);
+      return;
+    }
+
+    const latestRun = this.db
+      .prepare("SELECT id, status, updated_at FROM runs WHERE project_slug = ? ORDER BY created_at DESC LIMIT 1")
+      .get(slug) as Pick<RunRecord, "id" | "status" | "updated_at"> | undefined;
+    const nextStatus = latestRun?.status === "failed" ? "failed" : "idle";
+    const updated = nowIso();
+    this.db
+      .prepare(
+        `UPDATE projects
+         SET agent_status = ?,
+             active_turn_id = NULL,
+             last_agent_update_at = ?,
+             updated_at = ?
+         WHERE slug = ?`
+      )
+      .run(nextStatus, latestRun?.updated_at ?? updated, updated, slug);
   }
 
   private syncRequestsFromQueue(project: ProjectRecord, queue: ParsedQueue): void {

@@ -16,7 +16,8 @@
     "isolatedModules": true,
     "noUncheckedIndexedAccess": true,
     "paths": {
-      "@startup-os/shared": ["./packages/shared/src/index.ts"]
+      "@startup-os/shared": ["./packages/shared/src/index.ts"],
+      "@startup-os/shared/browser": ["./packages/shared/src/browser.ts"]
     }
   }
 }

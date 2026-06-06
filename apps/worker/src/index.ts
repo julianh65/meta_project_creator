@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
-import { JobRecord, ProjectRecord, StartupStorage } from "@startup-os/shared";
+import { JobRecord, ProjectRecord, StartupStorage, WORKER_VERSION } from "@startup-os/shared";
 
 const workerId = `local-${os.hostname()}-${process.pid}`;
 const storage = new StartupStorage();
@@ -20,7 +20,7 @@ if (interrupted > 0) {
 }
 
 const heartbeatTimer = setInterval(() => {
-  storage.recordWorkerHeartbeat(workerId, currentJobId);
+  storage.recordWorkerHeartbeat(workerId, currentJobId, WORKER_VERSION);
 }, heartbeatMs);
 
 process.on("SIGINT", shutdown);
@@ -29,7 +29,7 @@ process.on("SIGTERM", shutdown);
 void mainLoop();
 
 async function mainLoop(): Promise<void> {
-  storage.recordWorkerHeartbeat(workerId);
+  storage.recordWorkerHeartbeat(workerId, null, WORKER_VERSION);
 
   while (!shuttingDown) {
     const job = storage.claimNextJob(workerId);
@@ -40,7 +40,7 @@ async function mainLoop(): Promise<void> {
         storage.failJob(job.id, "failed", message);
       });
       currentJobId = null;
-      storage.recordWorkerHeartbeat(workerId, null);
+      storage.recordWorkerHeartbeat(workerId, null, WORKER_VERSION);
       continue;
     }
     await sleep(pollMs);
@@ -81,7 +81,14 @@ async function executeJob(job: JobRecord): Promise<void> {
     return;
   }
 
-  const template = process.env.CODEX_COMMAND_TEMPLATE;
+  const rawTemplate = process.env.CODEX_COMMAND_TEMPLATE?.trim();
+  const template = customCommandTemplate();
+  if (rawTemplate && !template) {
+    storage.appendRunLogs(
+      job.run_id,
+      `[worker] Ignoring legacy CODEX_COMMAND_TEMPLATE=${shellQuote(rawTemplate)}. The built-in manager uses codex exec --json instead.\n`
+    );
+  }
   if (template) {
     const command = renderCommandTemplate(template, {
       prompt: job.prompt,
@@ -124,7 +131,20 @@ function shouldDryRun(): boolean {
   if (process.env.STARTUP_OS_DRY_RUN === "true") {
     return true;
   }
-  return !process.env.CODEX_COMMAND_TEMPLATE;
+  return !customCommandTemplate();
+}
+
+function customCommandTemplate(): string | null {
+  const template = process.env.CODEX_COMMAND_TEMPLATE?.trim();
+  if (!template || isLegacyInteractiveCodexTemplate(template)) {
+    return null;
+  }
+  return template;
+}
+
+function isLegacyInteractiveCodexTemplate(template: string): boolean {
+  const normalized = template.replace(/\s+/g, " ");
+  return normalized === "codex {prompt}" || normalized === "codex '{prompt}'" || normalized === 'codex "{prompt}"';
 }
 
 function renderCommandTemplate(
@@ -283,7 +303,7 @@ function runShellCommand(
     const progressTimer = setInterval(() => {
       const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
       storage.touchJob(job.id);
-      storage.recordWorkerHeartbeat(workerId, job.id);
+      storage.recordWorkerHeartbeat(workerId, job.id, WORKER_VERSION);
       onOutput(`[worker] Still running ${job.job_type} job after ${elapsedSeconds}s. Waiting for command output or completion.\n`);
     }, jobProgressMs);
 
@@ -316,7 +336,7 @@ function runJsonProcess(
     const progressTimer = setInterval(() => {
       const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
       storage.touchJob(job.id);
-      storage.recordWorkerHeartbeat(workerId, job.id);
+      storage.recordWorkerHeartbeat(workerId, job.id, WORKER_VERSION);
       storage.updateProjectAgentState(job.project_slug, {
         agent_status: "running"
       });
@@ -364,7 +384,7 @@ function sleep(ms: number): Promise<void> {
 function shutdown(): void {
   shuttingDown = true;
   clearInterval(heartbeatTimer);
-  storage.recordWorkerHeartbeat(workerId, currentJobId);
+  storage.recordWorkerHeartbeat(workerId, currentJobId, WORKER_VERSION);
   storage.close();
   process.exit(0);
 }

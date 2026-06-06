@@ -23,6 +23,7 @@ import {
   XCircle
 } from "lucide-react";
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { WORKER_VERSION } from "@startup-os/shared/browser";
 import type {
   AutonomyLevel,
   DashboardSummary,
@@ -66,6 +67,7 @@ type DraftInput = {
 export function App() {
   const route = useRoute();
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
+  const staleWorkerVersion = Boolean(summary?.worker.is_online && summary.worker.version !== WORKER_VERSION);
 
   useEffect(() => {
     let active = true;
@@ -108,6 +110,12 @@ export function App() {
         <div className="worker-card">
           <StatusPill status={summary?.worker.is_online ? "online" : "offline"} />
           <span>{summary?.worker.last_seen_at ? timeAgo(summary.worker.last_seen_at) : "never seen"}</span>
+          <span>worker v{summary?.worker.version ?? "unknown"}</span>
+          {staleWorkerVersion && (
+            <span className="worker-warning">
+              <AlertCircle size={14} /> restart for v{WORKER_VERSION}
+            </span>
+          )}
           {summary?.worker.current_job_id && (
             <span className="live-line">running {summary.worker.current_job_id.slice(0, 8)}</span>
           )}
@@ -194,7 +202,7 @@ function DocsView() {
             <ExplainItem
               icon={<Terminal size={18} />}
               title="Worker is the executor"
-              body="The local worker polls SQLite for queued jobs. If it is offline, jobs wait. If it is online, it claims jobs and runs either dry-run mode or your configured Codex command."
+              body="The local worker polls SQLite for queued jobs. Dry-run proves the queue path; real mode uses the built-in codex exec manager unless you provide a non-legacy custom command template."
             />
             <ExplainItem
               icon={<MessageSquarePlus size={18} />}
@@ -271,6 +279,7 @@ function DocsView() {
           <div className="explain-list">
             <ExplainItem icon={<ClipboardList size={18} />} title="Jobs" body="Live queue state: queued, running, succeeded, failed, or interrupted." />
             <ExplainItem icon={<Activity size={18} />} title="Runs" body="Historical execution records with prompt, logs, summary, errors, and timestamps." />
+            <ExplainItem icon={<AlertCircle size={18} />} title="Worker version" body="The sidebar shows the last worker version. If it warns to restart, queued jobs may be claimed by old code until you restart the worker process." />
             <ExplainItem icon={<RefreshCw size={18} />} title="Progress updates" body="When a worker claims a job it logs the current task and plan. While a real command runs, it keeps appending still-running updates so you can tell the agent is live." />
             <ExplainItem icon={<Inbox size={18} />} title="Inbox" body="Only surfaced human decisions, blockers, approvals, and external-action requests should show here." />
           </div>

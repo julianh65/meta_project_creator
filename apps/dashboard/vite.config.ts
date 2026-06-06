@@ -23,8 +23,15 @@ export default defineConfig({
     emptyOutDir: true
   },
   resolve: {
-    alias: {
-      "@startup-os/shared": fileURLToPath(new URL("../../packages/shared/src/index.ts", import.meta.url))
-    }
+    alias: [
+      {
+        find: "@startup-os/shared/browser",
+        replacement: fileURLToPath(new URL("../../packages/shared/src/browser.ts", import.meta.url))
+      },
+      {
+        find: "@startup-os/shared",
+        replacement: fileURLToPath(new URL("../../packages/shared/src/index.ts", import.meta.url))
+      }
+    ]
   }
 });

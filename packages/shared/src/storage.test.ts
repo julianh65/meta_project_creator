@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { appendQueueItem, createAppPaths, generateProjectDraft, StartupStorage } from "./index";
+import { appendQueueItem, createAppPaths, generateProjectDraft, StartupStorage, WORKER_VERSION } from "./index";
 
 const roots: string[] = [];
 
@@ -142,6 +142,44 @@ describe("StartupStorage", () => {
     assert.match(completed.logs, /hello logs/);
     assert.equal(storage.getProjectBySlug(project.slug)?.agent_status, "idle");
     assert.ok(storage.getProjectBySlug(project.slug)?.last_heartbeat_at);
+    storage.close();
+  });
+
+  it("records the current worker version in heartbeat status", () => {
+    const storage = tempStorage();
+
+    storage.recordWorkerHeartbeat("test-worker", null, WORKER_VERSION);
+    const worker = storage.getWorkerStatus();
+
+    assert.equal(worker.worker_id, "test-worker");
+    assert.equal(worker.version, WORKER_VERSION);
+    assert.equal(worker.is_online, true);
+    storage.close();
+  });
+
+  it("reconciles stale queued project state after a failed worker run", () => {
+    const storage = tempStorage();
+    const draft = generateProjectDraft({ rawPrompt: "A tiny web app for testing failed startup builds.", name: "Failed Build", type: "web" });
+    const project = storage.createProjectFromDraft(draft);
+    const run = storage.enqueueInitialBuild(project.slug);
+    const job = storage.claimNextJob("old-worker");
+
+    assert.ok(job);
+    storage.db
+      .prepare("UPDATE jobs SET status = 'failed', finished_at = updated_at WHERE id = ?")
+      .run(job.id);
+    storage.db
+      .prepare("UPDATE runs SET status = 'failed', error = ?, finished_at = updated_at WHERE id = ?")
+      .run("Error: stdin is not a terminal", run.id);
+    storage.db
+      .prepare("UPDATE projects SET agent_status = 'queued', active_turn_id = ? WHERE slug = ?")
+      .run(run.id, project.slug);
+
+    const detail = storage.getProjectDetail(project.slug);
+
+    assert.equal(detail?.agent_status, "failed");
+    assert.equal(detail?.active_turn_id, null);
+    assert.match(detail?.runs[0]?.error ?? "", /stdin is not a terminal/);
     storage.close();
   });
 

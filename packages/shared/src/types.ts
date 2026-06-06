@@ -84,6 +84,8 @@ export const PROJECT_FILE_NAMES: ProjectFileName[] = [
   "LOG.md"
 ];
 
+export const WORKER_VERSION = "0.3.0";
+
 export interface ProjectRecord {
   id: string;
   slug: string;
