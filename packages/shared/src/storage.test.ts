@@ -47,10 +47,41 @@ describe("StartupStorage", () => {
     const requests = storage.listRequests({ projectSlug: project.slug, includeDone: true });
     assert.equal(requests.some((request) => request.type === "account_setup"), true);
 
+    const accountRequest = requests.find((request) => request.type === "account_setup");
+    assert.ok(accountRequest);
+    storage.updateRequestStatus(accountRequest.id, "approved");
+    storage.syncProjectFromFiles(project.slug);
+    assert.equal(
+      storage.listRequests({ projectSlug: project.slug }).some((request) => request.id === accountRequest.id),
+      false
+    );
+
+    const needsJulian = storage.listRequests({ projectSlug: project.slug }).find((request) => request.type === "needs_julian");
+    assert.ok(needsJulian);
+    const responded = storage.respondToRequest(needsJulian.id, "Build the fake local flow first.");
+    const afterResponse = storage.getProjectDetail(project.slug);
+    assert.equal(responded.status, "done");
+    assert.match(responded.thread, /Build the fake local flow first/);
+    assert.equal(afterResponse?.queue.now.some((item) => item.text.includes("Build the fake local flow first")), true);
+    assert.equal(afterResponse?.runs.some((run) => run.run_type === "feedback"), true);
+
     const feedbackRun = storage.addFeedback(project.slug, "Make the local demo before touching auth.");
     const afterFeedback = storage.getProjectDetail(project.slug);
     assert.equal(feedbackRun.run_type, "feedback");
     assert.equal(afterFeedback?.queue.now.some((item) => item.text.includes("Make the local demo")), true);
+    storage.close();
+  });
+
+  it("keeps generic project creation out of the inbox", () => {
+    const storage = tempStorage();
+    const draft = generateProjectDraft({
+      rawPrompt: "A throwaway web prototype for sketching a local idea with no external services.",
+      name: "Quiet Prototype",
+      type: "web"
+    });
+    const project = storage.createProjectFromDraft(draft);
+
+    assert.equal(storage.listRequests({ projectSlug: project.slug, includeDone: true }).length, 0);
     storage.close();
   });
 

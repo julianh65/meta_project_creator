@@ -214,6 +214,7 @@ export interface ProjectDetail extends ProjectRecord {
   queue: ParsedQueue;
   requests: RequestRecord[];
   runs: RunRecord[];
+  jobs: JobRecord[];
   recentLogEntries: string[];
   manualCommand: string;
 }
@@ -225,6 +226,9 @@ export interface DashboardSummary {
   staleProjects: number;
   browserOps: number;
   approvals: number;
+  queuedJobs: number;
+  runningJobs: number;
   recentRuns: RunRecord[];
+  activeJobs: JobRecord[];
   projects: ProjectRecord[];
 }

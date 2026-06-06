@@ -159,9 +159,20 @@ app.get("/api/runs", (req, res) => {
   res.json(storage.listRuns(100, projectSlug));
 });
 
+app.get("/api/jobs", (req, res) => {
+  const projectSlug = typeof req.query.project === "string" ? req.query.project : undefined;
+  const includeFinished = req.query.includeFinished === "true";
+  res.json(storage.listJobs({ projectSlug, includeFinished, limit: 100 }));
+});
+
 app.patch("/api/requests/:id", (req, res) => {
   const parsed = z.object({ status: z.enum(REQUEST_STATUSES) }).parse(req.body);
   res.json(storage.updateRequestStatus(req.params.id, parsed.status));
+});
+
+app.post("/api/requests/:id/respond", (req, res) => {
+  const parsed = z.object({ response: z.string().min(1) }).parse(req.body);
+  res.json(storage.respondToRequest(req.params.id, parsed.response));
 });
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

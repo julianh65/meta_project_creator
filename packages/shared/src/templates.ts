@@ -199,7 +199,7 @@ function renderQueueMd(proposal: ProjectProposal): string {
 
 ## Needs Julian
 
-${proposal.needsJulian.map((item) => `- [ ] ${item}`).join("\n") || "- [ ] Review the first prototype direction."}
+${proposal.needsJulian.map((item) => `- [ ] ${item}`).join("\n") || "- [ ] None yet."}
 
 ## Browser/Ops Requests
 
@@ -524,9 +524,6 @@ function inferNeedsJulian(rawPrompt: string, neededNow: string[]): string[] {
   }
   if (/(private|secret|account|login|payment|domain|deploy|post)/i.test(rawPrompt)) {
     needs.push("Approve any external side effects before the agent attempts them.");
-  }
-  if (needs.length === 0) {
-    needs.push("Review the first prototype and confirm whether the MVP direction is right.");
   }
   return needs;
 }

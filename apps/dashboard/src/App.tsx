@@ -1,10 +1,10 @@
 import {
   Activity,
   AlertCircle,
+  BookOpen,
   CheckCircle2,
   CircleDot,
   ClipboardList,
-  Code2,
   ExternalLink,
   FileText,
   FolderKanban,
@@ -32,6 +32,7 @@ import type {
   ProjectType,
   RequestRecord,
   RequestStatus,
+  JobRecord,
   RunRecord
 } from "@startup-os/shared";
 
@@ -43,8 +44,12 @@ const navItems = [
   { href: "#/new", label: "New Project", icon: Plus },
   { href: "#/inbox", label: "Inbox", icon: Inbox },
   { href: "#/ops", label: "Browser/Ops", icon: Globe2 },
-  { href: "#/runs", label: "Runs", icon: Activity }
+  { href: "#/runs", label: "Runs", icon: Activity },
+  { href: "#/docs", label: "How It Works", icon: BookOpen }
 ];
+
+const activeRequestStatuses = ["open", "queued", "running", "needs_julian", "failed"];
+const archivedRequestStatuses = ["approved", "rejected", "done", "stale"];
 
 type DraftInput = {
   rawPrompt: string;
@@ -111,6 +116,7 @@ export function App() {
         {route === "/inbox" && <InboxView />}
         {route === "/ops" && <OpsView />}
         {route === "/runs" && <RunsView />}
+        {route === "/docs" && <DocsView />}
         {route.startsWith("/projects/") && <ProjectDetailView slug={decodeURIComponent(route.split("/")[2] ?? "")} />}
       </main>
     </div>
@@ -133,6 +139,8 @@ function DashboardView({ summary }: { summary: DashboardSummary | null }) {
         <MetricCard label="Stale projects" value={summary.staleProjects} icon={<RefreshCw size={18} />} tone="red" />
         <MetricCard label="Browser/Ops" value={summary.browserOps} icon={<Globe2 size={18} />} tone="blue" />
         <MetricCard label="Approvals" value={summary.approvals} icon={<ClipboardList size={18} />} />
+        <MetricCard label="Queued jobs" value={summary.queuedJobs} icon={<ClipboardList size={18} />} tone="blue" />
+        <MetricCard label="Running jobs" value={summary.runningJobs} icon={<Activity size={18} />} tone="amber" />
       </div>
       <div className="two-column">
         <Panel title="Projects">
@@ -146,12 +154,97 @@ function DashboardView({ summary }: { summary: DashboardSummary | null }) {
             <EmptyState icon={<Plus size={24} />} title="No projects yet" body="Create one from a messy prompt." />
           )}
         </Panel>
+        <Panel title="Active jobs">
+          <JobList jobs={summary.activeJobs} compact />
+        </Panel>
         <Panel title="Recent runs">
           {summary.recentRuns.length ? (
             <RunList runs={summary.recentRuns} compact />
           ) : (
             <EmptyState icon={<Activity size={24} />} title="No runs yet" body="Queue a heartbeat or feedback job." />
           )}
+        </Panel>
+      </div>
+    </section>
+  );
+}
+
+function DocsView() {
+  return (
+    <section className="page-stack">
+      <Header eyebrow="Docs" title="How Startup OS works" />
+      <div className="docs-grid">
+        <Panel title="The core model">
+          <div className="explain-list">
+            <ExplainItem
+              icon={<FolderKanban size={18} />}
+              title="Project folders are source of truth"
+              body="Every idea becomes a normal folder under projects/<slug> with AGENTS.md, PROJECT.md, QUEUE.md, and LOG.md. The dashboard indexes those files, but the files are the durable memory."
+            />
+            <ExplainItem
+              icon={<LayoutDashboard size={18} />}
+              title="Dashboard is the control plane"
+              body="Use it to create projects, inspect state, edit Markdown, queue work, read runs, and answer inbox items. You can still cd into any project and run Codex manually."
+            />
+            <ExplainItem
+              icon={<Terminal size={18} />}
+              title="Worker is the executor"
+              body="The local worker polls SQLite for queued jobs. If it is offline, jobs wait. If it is online, it claims jobs and runs either dry-run mode or your configured Codex command."
+            />
+          </div>
+        </Panel>
+
+        <Panel title="After you create a project">
+          <ol className="step-list">
+            <li>Open the project detail page.</li>
+            <li>Review PROJECT.md and QUEUE.md. The first useful task should be under QUEUE.md &gt; Now.</li>
+            <li>Start the worker in another terminal.</li>
+            <li>Click Heartbeat to queue one autonomous work cycle.</li>
+            <li>Watch Jobs for queued/running state and Runs for logs/results.</li>
+            <li>Use the inbox to answer questions or approve/deny external requests.</li>
+          </ol>
+          <div className="command-box">
+            <code>npm run dev:worker</code>
+          </div>
+          <div className="command-box">
+            <code>STARTUP_OS_DRY_RUN=false CODEX_COMMAND_TEMPLATE='codex {"{prompt}"}' npm run dev:worker</code>
+          </div>
+        </Panel>
+
+        <Panel title="What a heartbeat is">
+          <p className="docs-copy">
+            A heartbeat is one autonomous work cycle. It tells the project agent to read AGENTS.md,
+            PROJECT.md, QUEUE.md, and LOG.md, pick the current Now item or another useful MVP task,
+            make scoped local progress, run practical checks, then update QUEUE.md and LOG.md.
+          </p>
+          <p className="docs-copy">
+            Heartbeats are explicit. Clicking Heartbeat queues a job; the worker has to be running to
+            execute it. In dry-run mode the worker only proves the queue/log path. With dry-run disabled,
+            it runs the configured Codex command inside the project directory.
+          </p>
+        </Panel>
+
+        <Panel title="Monitoring">
+          <div className="explain-list">
+            <ExplainItem icon={<ClipboardList size={18} />} title="Jobs" body="Live queue state: queued, running, succeeded, failed, or interrupted." />
+            <ExplainItem icon={<Activity size={18} />} title="Runs" body="Historical execution records with prompt, logs, summary, errors, and timestamps." />
+            <ExplainItem icon={<Inbox size={18} />} title="Inbox" body="Only surfaced human decisions, blockers, approvals, and external-action requests should show here." />
+          </div>
+        </Panel>
+
+        <Panel title="Autonomy boundaries">
+          <p className="docs-copy">
+            Local file edits, local commands, research, drafts, and prototype work are allowed. External
+            side effects are approval-gated: public posts, emails, deployments, DNS, payments, paid services,
+            account creation, secrets, CAPTCHA, login, and 2FA should go through the inbox or Browser/Ops.
+          </p>
+        </Panel>
+
+        <Panel title="Manual takeover">
+          <p className="docs-copy">Every project remains manually usable. Open a terminal and run:</p>
+          <div className="command-box">
+            <code>cd projects/&lt;slug&gt; &amp;&amp; codex</code>
+          </div>
         </Panel>
       </div>
     </section>
@@ -439,14 +532,17 @@ function ProjectDetailView({ slug }: { slug: string }) {
   const [feedback, setFeedback] = useState("");
   const [selectedFile, setSelectedFile] = useState<ProjectFileName>("PROJECT.md");
   const [fileContent, setFileContent] = useState("");
+  const [fileDirty, setFileDirty] = useState(false);
   const [cadenceHours, setCadenceHours] = useState(168);
   const [autoQueueWhenStale, setAutoQueueWhenStale] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const load = async () => {
+  const load = async (options: { syncFile?: boolean } = {}) => {
     const data = await fetchJson<ProjectDetail>(`/api/projects/${slug}`);
     setDetail(data);
-    setFileContent(data.files[selectedFile]);
+    if (options.syncFile === true || (options.syncFile !== false && !fileDirty)) {
+      setFileContent(data.files[selectedFile]);
+    }
     setCadenceHours(data.stale_after_hours ?? 168);
     setAutoQueueWhenStale(Boolean(data.auto_queue_when_stale));
     setLoading(false);
@@ -454,18 +550,26 @@ function ProjectDetailView({ slug }: { slug: string }) {
 
   useEffect(() => {
     setLoading(true);
-    load().catch(console.error);
+    load({ syncFile: true }).catch(console.error);
   }, [slug]);
 
   useEffect(() => {
-    if (detail) setFileContent(detail.files[selectedFile]);
+    const id = window.setInterval(() => load({ syncFile: false }).catch(console.error), 4000);
+    return () => window.clearInterval(id);
+  }, [slug, selectedFile, fileDirty]);
+
+  useEffect(() => {
+    if (detail) {
+      setFileContent(detail.files[selectedFile]);
+      setFileDirty(false);
+    }
   }, [selectedFile, detail]);
 
   const heartbeat = async () => {
     setBusy(true);
     try {
       await fetchJson(`/api/projects/${slug}/heartbeat`, { method: "POST" });
-      await load();
+      await load({ syncFile: false });
     } finally {
       setBusy(false);
     }
@@ -480,7 +584,7 @@ function ProjectDetailView({ slug }: { slug: string }) {
         body: JSON.stringify({ feedback })
       });
       setFeedback("");
-      await load();
+      await load({ syncFile: false });
     } finally {
       setBusy(false);
     }
@@ -493,7 +597,8 @@ function ProjectDetailView({ slug }: { slug: string }) {
         method: "PUT",
         body: JSON.stringify({ content: fileContent })
       });
-      await load();
+      setFileDirty(false);
+      await load({ syncFile: true });
     } finally {
       setBusy(false);
     }
@@ -514,7 +619,7 @@ function ProjectDetailView({ slug }: { slug: string }) {
         method: "PUT",
         body: JSON.stringify({ content: nextProjectMd })
       });
-      await load();
+      await load({ syncFile: true });
     } finally {
       setBusy(false);
     }
@@ -610,7 +715,10 @@ function ProjectDetailView({ slug }: { slug: string }) {
             </button>
           ))}
         </div>
-        <textarea className="code-editor" value={fileContent} onChange={(event) => setFileContent(event.target.value)} />
+        <textarea className="code-editor" value={fileContent} onChange={(event) => {
+          setFileContent(event.target.value);
+          setFileDirty(true);
+        }} />
         <div className="button-row">
           <button className="button primary" onClick={saveFile} disabled={busy}>
             <Save size={16} /> Save {selectedFile}
@@ -619,11 +727,34 @@ function ProjectDetailView({ slug }: { slug: string }) {
       </Panel>
 
       <div className="two-column">
+        <Panel title="Jobs">
+          <JobList jobs={detail.jobs} compact />
+        </Panel>
         <Panel title="Recent log">
           {detail.recentLogEntries.length ? <SimpleList items={detail.recentLogEntries} /> : <EmptyState icon={<FileText size={22} />} title="No log entries" body="LOG.md is empty." />}
         </Panel>
+      </div>
+
+      <div className="two-column">
         <Panel title="Recent runs">
           <RunList runs={detail.runs} compact />
+        </Panel>
+        <Panel title="Inbox items">
+          {detail.requests.length ? (
+            <div className="request-mini-list">
+              {detail.requests.map((item) => (
+                <a className="row-link" href="#/inbox" key={item.id}>
+                  <div>
+                    <strong>{item.title}</strong>
+                    <span>{item.type}</span>
+                  </div>
+                  <RunBadge status={item.status === "failed" ? "failed" : "queued"} label={item.status} />
+                </a>
+              ))}
+            </div>
+          ) : (
+            <EmptyState icon={<Inbox size={22} />} title="No active inbox items" body="This project has no surfaced blockers or approvals." />
+          )}
         </Panel>
       </div>
     </section>
@@ -632,22 +763,23 @@ function ProjectDetailView({ slug }: { slug: string }) {
 
 function InboxView() {
   const [items, setItems] = useState<RequestRecord[]>([]);
-  const [filter, setFilter] = useState("all");
+  const [filter, setFilter] = useState("active");
 
   const load = async () => setItems(await fetchJson<RequestRecord[]>("/api/inbox?includeDone=true"));
   useEffect(() => {
     load().catch(console.error);
   }, []);
 
-  const filtered = filter === "all" ? items : items.filter((item) => item.type === filter || item.status === filter);
+  const filtered = items.filter((item) => requestMatchesFilter(item, filter));
 
   return (
     <RequestPage
       eyebrow="Inbox"
       title="Needs attention"
+      allItems={items}
       items={filtered}
       reload={load}
-      filters={["all", "needs_julian", "browser_ops", "marketing_approval", "deploy_approval", "blocked", "failed", "done"]}
+      filters={["active", "questions", "approvals", "browser_ops", "blocked", "failed", "archive"]}
       activeFilter={filter}
       setFilter={setFilter}
     />
@@ -656,22 +788,23 @@ function InboxView() {
 
 function OpsView() {
   const [items, setItems] = useState<RequestRecord[]>([]);
-  const [filter, setFilter] = useState("all");
+  const [filter, setFilter] = useState("active");
   const load = async () => setItems(await fetchJson<RequestRecord[]>("/api/ops"));
 
   useEffect(() => {
     load().catch(console.error);
   }, []);
 
-  const filtered = filter === "all" ? items : items.filter((item) => item.type === filter || item.status === filter);
+  const filtered = items.filter((item) => requestMatchesFilter(item, filter));
 
   return (
     <RequestPage
       eyebrow="Browser/Ops"
       title="External action queue"
+      allItems={items}
       items={filtered}
       reload={load}
-      filters={["all", "browser_ops", "account_setup", "captcha_needed", "login_needed", "payment_needed", "open", "done"]}
+      filters={["active", "browser_ops", "account_setup", "captcha_needed", "login_needed", "payment_needed", "archive"]}
       activeFilter={filter}
       setFilter={setFilter}
     />
@@ -681,15 +814,24 @@ function OpsView() {
 function RequestPage(props: {
   eyebrow: string;
   title: string;
+  allItems: RequestRecord[];
   items: RequestRecord[];
   reload: () => Promise<void>;
   filters: string[];
   activeFilter: string;
   setFilter: (filter: string) => void;
 }) {
+  const stats = useMemo(() => requestStats(props.allItems), [props.allItems]);
+
   return (
     <section className="page-stack">
       <Header eyebrow={props.eyebrow} title={props.title} />
+      <div className="inbox-summary">
+        <MetricCard label="Active" value={stats.active} icon={<Inbox size={18} />} />
+        <MetricCard label="Questions" value={stats.questions} icon={<MessageSquarePlus size={18} />} tone="amber" />
+        <MetricCard label="Approvals" value={stats.approvals} icon={<ClipboardList size={18} />} tone="blue" />
+        <MetricCard label="Archived" value={stats.archive} icon={<CheckCircle2 size={18} />} />
+      </div>
       <div className="tab-row">
         {props.filters.map((filter) => (
           <button className={props.activeFilter === filter ? "tab active" : "tab"} key={filter} onClick={() => props.setFilter(filter)}>
@@ -711,17 +853,41 @@ function RequestPage(props: {
 }
 
 function RequestCard({ item, reload }: { item: RequestRecord; reload: () => Promise<void> }) {
+  const [response, setResponse] = useState("");
+  const [busy, setBusy] = useState(false);
+  const archived = isArchivedRequest(item);
+
   const update = async (status: RequestStatus) => {
-    await fetchJson(`/api/requests/${item.id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ status })
-    });
-    await reload();
+    setBusy(true);
+    try {
+      await fetchJson(`/api/requests/${item.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status })
+      });
+      await reload();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const respond = async () => {
+    if (!response.trim()) return;
+    setBusy(true);
+    try {
+      await fetchJson(`/api/requests/${item.id}/respond`, {
+        method: "POST",
+        body: JSON.stringify({ response })
+      });
+      setResponse("");
+      await reload();
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
     <article className="request-card">
-      <div>
+      <div className="request-body">
         <div className="meta-row">
           <Tag>{item.project_slug}</Tag>
           <Tag>{item.type}</Tag>
@@ -730,11 +896,28 @@ function RequestCard({ item, reload }: { item: RequestRecord; reload: () => Prom
         </div>
         <h3>{item.title}</h3>
         <p>{item.body}</p>
+        {item.thread.trim() && <pre className="request-thread">{item.thread}</pre>}
+        {!archived && (
+          <label className="field response-field">
+            <span>Respond and queue follow-up</span>
+            <textarea
+              value={response}
+              onChange={(event) => setResponse(event.target.value)}
+              placeholder="Answer the question, approve a direction, or give the next instruction..."
+            />
+          </label>
+        )}
       </div>
-      <div className="button-row">
-        <button className="button" onClick={() => update("approved")}>Approve</button>
-        <button className="button" onClick={() => update("done")}>Done</button>
-        <button className="button danger" onClick={() => update("rejected")}>Reject</button>
+      <div className="request-actions">
+        {!archived && (
+          <button className="button primary" onClick={respond} disabled={busy || !response.trim()}>
+            <Send size={15} /> Respond
+          </button>
+        )}
+        {!archived && <button className="button" onClick={() => update("approved")} disabled={busy}>Approve</button>}
+        {!archived && <button className="button" onClick={() => update("done")} disabled={busy}>Done</button>}
+        {!archived && <button className="button danger" onClick={() => update("rejected")} disabled={busy}>Reject</button>}
+        {archived && <span className="muted">Archived {timeAgo(item.updated_at)}</span>}
       </div>
     </article>
   );
@@ -742,15 +925,66 @@ function RequestCard({ item, reload }: { item: RequestRecord; reload: () => Prom
 
 function RunsView() {
   const [runs, setRuns] = useState<RunRecord[]>([]);
+  const [jobs, setJobs] = useState<JobRecord[]>([]);
+  const load = async () => {
+    const [nextRuns, nextJobs] = await Promise.all([
+      fetchJson<RunRecord[]>("/api/runs"),
+      fetchJson<JobRecord[]>("/api/jobs?includeFinished=true")
+    ]);
+    setRuns(nextRuns);
+    setJobs(nextJobs);
+  };
+
   useEffect(() => {
-    fetchJson<RunRecord[]>("/api/runs").then(setRuns).catch(console.error);
+    load().catch(console.error);
+    const id = window.setInterval(() => load().catch(console.error), 4000);
+    return () => window.clearInterval(id);
   }, []);
 
   return (
     <section className="page-stack">
-      <Header eyebrow="Runs" title="Worker and Codex attempts" />
+      <Header
+        eyebrow="Runs"
+        title="Worker and Codex attempts"
+        action={
+          <button className="button" onClick={() => load().catch(console.error)}>
+            <RefreshCw size={16} /> Refresh
+          </button>
+        }
+      />
+      <Panel title="Job queue">
+        <JobList jobs={jobs} />
+      </Panel>
       <RunList runs={runs} />
     </section>
+  );
+}
+
+function JobList({ jobs, compact = false }: { jobs: JobRecord[]; compact?: boolean }) {
+  if (!jobs.length) {
+    return <EmptyState icon={<ClipboardList size={22} />} title="No jobs" body="Heartbeat and feedback jobs will appear here." />;
+  }
+
+  return (
+    <div className={compact ? "job-list compact" : "job-list"}>
+      {jobs.map((job) => (
+        <article className="job-card" key={job.id}>
+          <div className="run-title">
+            <RunBadge status={job.status} />
+            <strong>{job.job_type}</strong>
+            <span>{job.project_slug}</span>
+            <span>{job.worker_id ? `worker ${job.worker_id}` : "waiting for worker"}</span>
+          </div>
+          {!compact && (
+            <p>
+              Created {timeAgo(job.created_at)}
+              {job.started_at ? `, started ${timeAgo(job.started_at)}` : ""}
+              {job.finished_at ? `, finished ${timeAgo(job.finished_at)}` : ""}
+            </p>
+          )}
+        </article>
+      ))}
+    </div>
   );
 }
 
@@ -841,6 +1075,18 @@ function MetricCard({ label, value, icon, tone = "green" }: { label: string; val
   );
 }
 
+function ExplainItem({ icon, title, body }: { icon: ReactNode; title: string; body: string }) {
+  return (
+    <div className="explain-item">
+      <div>{icon}</div>
+      <section>
+        <strong>{title}</strong>
+        <p>{body}</p>
+      </section>
+    </div>
+  );
+}
+
 function StatusPill({ status }: { status: "online" | "offline" }) {
   return <span className={`status-pill ${status}`}>{status === "online" ? <CheckCircle2 size={14} /> : <XCircle size={14} />} worker {status}</span>;
 }
@@ -907,6 +1153,36 @@ function useRoute() {
 function normalizeRoute(hash: string) {
   const route = hash.replace(/^#/, "") || "/";
   return route.startsWith("/") ? route : `/${route}`;
+}
+
+function isArchivedRequest(item: RequestRecord): boolean {
+  return archivedRequestStatuses.includes(item.status);
+}
+
+function isActiveRequest(item: RequestRecord): boolean {
+  return activeRequestStatuses.includes(item.status);
+}
+
+function requestMatchesFilter(item: RequestRecord, filter: string): boolean {
+  if (filter === "active") return isActiveRequest(item);
+  if (filter === "archive") return isArchivedRequest(item);
+  if (filter === "questions") {
+    return isActiveRequest(item) && ["needs_julian", "secret_needed", "code_review", "general"].includes(item.type);
+  }
+  if (filter === "approvals") {
+    return isActiveRequest(item) && ["marketing_approval", "deploy_approval"].includes(item.type);
+  }
+  if (filter === "failed") return item.status === "failed";
+  return isActiveRequest(item) && (item.type === filter || item.status === filter);
+}
+
+function requestStats(items: RequestRecord[]) {
+  return {
+    active: items.filter(isActiveRequest).length,
+    questions: items.filter((item) => requestMatchesFilter(item, "questions")).length,
+    approvals: items.filter((item) => requestMatchesFilter(item, "approvals")).length,
+    archive: items.filter(isArchivedRequest).length
+  };
 }
 
 function findLocalAppUrl(markdown: string): string {

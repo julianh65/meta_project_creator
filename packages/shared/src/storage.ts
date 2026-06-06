@@ -198,7 +198,10 @@ export class StartupStorage {
       }).length,
       browserOps: this.countRequests(["browser_ops", "account_setup", "captcha_needed", "login_needed", "payment_needed"]),
       approvals: this.countRequests(["marketing_approval", "deploy_approval"]),
+      queuedJobs: this.countJobs("queued"),
+      runningJobs: this.countJobs("running"),
       recentRuns: this.listRuns(8),
+      activeJobs: this.listJobs({ limit: 8 }),
       projects: projects.slice(0, 8)
     };
   }
@@ -243,6 +246,7 @@ export class StartupStorage {
       queue,
       requests: this.listRequests({ projectSlug: slug }),
       runs: this.listRuns(20, slug),
+      jobs: this.listJobs({ projectSlug: slug, limit: 20, includeFinished: true }),
       recentLogEntries: recentLogEntries(files["LOG.md"] ?? "", 10),
       manualCommand: `cd ${project.path} && codex`
     };
@@ -397,11 +401,59 @@ Incorporate the feedback in one scoped work cycle. Update QUEUE.md and LOG.md wh
   updateRequestStatus(id: string, status: RequestStatus): RequestRecord {
     const updated = nowIso();
     this.db.prepare("UPDATE requests SET status = ?, updated_at = ? WHERE id = ?").run(status, updated, id);
-    const request = this.db.prepare("SELECT * FROM requests WHERE id = ?").get(id) as RequestRecord | undefined;
+    const request = this.getRequest(id);
     if (!request) {
       throw new Error(`Unknown request: ${id}`);
     }
     return request;
+  }
+
+  respondToRequest(id: string, response: string): RequestRecord {
+    const request = this.getRequest(id);
+    if (!request) {
+      throw new Error(`Unknown request: ${id}`);
+    }
+    const project = this.getProjectBySlug(request.project_slug);
+    if (!project) {
+      throw new Error(`Unknown project: ${request.project_slug}`);
+    }
+
+    const trimmed = response.trim();
+    const updated = nowIso();
+    const nextThread = `${request.thread.trim() ? `${request.thread.trim()}\n\n` : ""}## Julian response - ${updated}\n\n${trimmed}`;
+
+    this.db
+      .prepare("UPDATE requests SET status = 'done', thread = ?, updated_at = ? WHERE id = ?")
+      .run(nextThread, updated, id);
+
+    const queuePath = path.join(project.path, "QUEUE.md");
+    const logPath = path.join(project.path, "LOG.md");
+    fs.writeFileSync(
+      queuePath,
+      appendQueueItem(readIfExists(queuePath), "now", `Julian answered "${request.title}": ${trimmed}`),
+      "utf8"
+    );
+    fs.writeFileSync(
+      logPath,
+      appendLogEntry(readIfExists(logPath), `Julian responded to inbox item "${request.title}": ${trimmed}`),
+      "utf8"
+    );
+    this.syncProjectFromFiles(project.slug);
+
+    const prompt = `Read AGENTS.md, PROJECT.md, QUEUE.md, and LOG.md.
+
+Julian responded to this inbox item:
+
+${request.title}
+
+Julian's response:
+
+${trimmed}
+
+Act on this response in one scoped work cycle. If no code change is needed, update QUEUE.md and LOG.md to capture the decision. If external side effects are still needed, keep them explicit under Browser/Ops Requests.`;
+
+    this.enqueueRun(project.slug, "feedback", prompt, 10);
+    return this.getRequest(id) ?? request;
   }
 
   listRuns(limit = 50, projectSlug?: string): RunRecord[] {
@@ -417,12 +469,42 @@ Incorporate the feedback in one scoped work cycle. Update QUEUE.md and LOG.md wh
       .all(...params) as RunRecord[];
   }
 
+  listJobs(filter: { limit?: number; projectSlug?: string; includeFinished?: boolean } = {}): JobRecord[] {
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+
+    if (filter.projectSlug) {
+      clauses.push("project_slug = ?");
+      params.push(filter.projectSlug);
+    }
+    if (!filter.includeFinished) {
+      clauses.push("status IN ('queued','running')");
+    }
+
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    params.push(filter.limit ?? 50);
+    return this.db
+      .prepare(
+        `SELECT * FROM jobs ${where}
+         ORDER BY
+           CASE status WHEN 'running' THEN 0 WHEN 'queued' THEN 1 ELSE 2 END,
+           priority DESC,
+           updated_at DESC
+         LIMIT ?`
+      )
+      .all(...params) as JobRecord[];
+  }
+
   getRun(id: string): RunRecord {
     const run = this.db.prepare("SELECT * FROM runs WHERE id = ?").get(id) as RunRecord | undefined;
     if (!run) {
       throw new Error(`Unknown run: ${id}`);
     }
     return run;
+  }
+
+  getRequest(id: string): RequestRecord | null {
+    return (this.db.prepare("SELECT * FROM requests WHERE id = ?").get(id) as RequestRecord | undefined) ?? null;
   }
 
   getJob(id: string): JobRecord | null {
@@ -604,18 +686,21 @@ Incorporate the feedback in one scoped work cycle. Update QUEUE.md and LOG.md wh
     const candidates: Array<{ type: RequestType; title: string; body: string; risk: RequestRecord["risk"] }> = [];
 
     for (const item of queue.needsJulian.filter((entry) => !entry.done)) {
-      if (/none yet/i.test(item.text)) {
+      if (!shouldSurfaceNeedsJulian(item.text)) {
         continue;
       }
       candidates.push({ type: classifyNeedsJulian(item.text), title: item.text, body: item.text, risk: "medium" });
     }
     for (const item of queue.browserOps.filter((entry) => !entry.done)) {
-      if (/none yet/i.test(item.text)) {
+      if (!shouldSurfaceBrowserOps(item.text)) {
         continue;
       }
       candidates.push({ type: classifyBrowserOps(item.text), title: item.text, body: item.text, risk: "high" });
     }
     for (const item of queue.marketingDrafts.filter((entry) => !entry.done)) {
+      if (!shouldSurfaceApproval(item.text)) {
+        continue;
+      }
       candidates.push({ type: "marketing_approval", title: item.text, body: item.text, risk: "low" });
     }
 
@@ -632,7 +717,7 @@ Incorporate the feedback in one scoped work cycle. Update QUEUE.md and LOG.md wh
             body = excluded.body,
             type = excluded.type,
             risk = excluded.risk,
-            status = CASE WHEN requests.status IN ('done','rejected') THEN requests.status ELSE 'open' END,
+            status = CASE WHEN requests.status IN ('approved','done','rejected','stale') THEN requests.status ELSE 'open' END,
             updated_at = excluded.updated_at`
         )
         .run(
@@ -673,6 +758,13 @@ Incorporate the feedback in one scoped work cycle. Update QUEUE.md and LOG.md wh
     return row.count;
   }
 
+  private countJobs(status: RunStatus): number {
+    const row = this.db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE status = ?").get(status) as {
+      count: number;
+    };
+    return row.count;
+  }
+
   private ensureColumn(table: string, column: string, definition: string): void {
     const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
     if (!columns.some((entry) => entry.name === column)) {
@@ -705,6 +797,24 @@ function classifyBrowserOps(text: string): RequestType {
   if (/payment|billing|card/i.test(text)) return "payment_needed";
   if (/account|signup|sign up/i.test(text)) return "account_setup";
   return "browser_ops";
+}
+
+function shouldSurfaceNeedsJulian(text: string): boolean {
+  if (/none yet|review the first prototype direction|confirm whether the mvp direction/i.test(text)) {
+    return false;
+  }
+  return /julian|approve|approval|decide|decision|choose|question|blocked|blocker|secret|api key|token|captcha|login|2fa|payment|paid|billing|deploy|production|dns|domain|account|review/i.test(text);
+}
+
+function shouldSurfaceBrowserOps(text: string): boolean {
+  if (/none yet/i.test(text)) {
+    return false;
+  }
+  return /browser|ops|account|signup|sign up|login|captcha|2fa|payment|billing|card|dns|domain|deploy|post|email|service|verification/i.test(text);
+}
+
+function shouldSurfaceApproval(text: string): boolean {
+  return /approve|approval|review|publish|post|public|deploy|send/i.test(text) && !/draft a plain-language project description/i.test(text);
 }
 
 function sqlList(values: readonly string[]): string {
