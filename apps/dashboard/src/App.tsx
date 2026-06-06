@@ -138,6 +138,9 @@ export function App() {
 
 function DashboardView({ summary }: { summary: DashboardSummary | null }) {
   if (!summary) return <Loading title="Loading dashboard" />;
+  const primaryProject = summary.projects[0];
+  const latestRun = summary.recentRuns[0];
+  const activeWork = summary.activeJobs[0];
 
   return (
     <section className="page-stack">
@@ -146,6 +149,47 @@ function DashboardView({ summary }: { summary: DashboardSummary | null }) {
         title="Personal project swarm"
         action={<StatusPill status={summary.worker.is_online ? "online" : "offline"} />}
       />
+      <section className="command-center">
+        <div className="command-copy">
+          <span className="section-kicker">What needs attention</span>
+          <h2>{activeWork ? `${activeWork.job_type} is running` : primaryProject?.current_now_task ?? "No active project task"}</h2>
+          <p>
+            {activeWork
+              ? `${activeWork.project_slug} was claimed ${timeAgo(activeWork.started_at ?? activeWork.updated_at)} by ${activeWork.worker_id ?? "the local worker"}.`
+              : primaryProject
+                ? `${primaryProject.name} is ${phaseTitle(primaryProject.build_phase).toLowerCase()} with agent ${primaryProject.agent_status}.`
+                : "Create a project to start an initial build."}
+          </p>
+          <div className="button-row">
+            {primaryProject ? (
+              <a className="button primary" href={`#/projects/${primaryProject.slug}`}>
+                <ExternalLink size={16} /> Open current project
+              </a>
+            ) : (
+              <a className="button primary" href="#/new">
+                <Plus size={16} /> New project
+              </a>
+            )}
+            <a className="button" href="#/runs">
+              <Activity size={16} /> View runs
+            </a>
+            <a className="button" href="#/inbox">
+              <Inbox size={16} /> Review inbox
+            </a>
+          </div>
+        </div>
+        <div className="command-rail">
+          <StatusPill status={summary.worker.is_online ? "online" : "offline"} />
+          <span>{summary.worker.current_job_id ? `job ${summary.worker.current_job_id.slice(0, 8)}` : "no active job"}</span>
+          <span>worker v{summary.worker.version}</span>
+          {latestRun && (
+            <a className="latest-run-link" href="#/runs">
+              <RunBadge status={latestRun.status} />
+              <span>{latestRun.run_type} {timeAgo(latestRun.finished_at ?? latestRun.updated_at)}</span>
+            </a>
+          )}
+        </div>
+      </section>
       <div className="metric-grid">
         <MetricCard label="Active projects" value={summary.activeProjects} icon={<FolderKanban size={18} />} />
         <MetricCard label="Need Julian" value={summary.needsJulian} icon={<AlertCircle size={18} />} tone="amber" />
@@ -155,7 +199,7 @@ function DashboardView({ summary }: { summary: DashboardSummary | null }) {
         <MetricCard label="Queued jobs" value={summary.queuedJobs} icon={<ClipboardList size={18} />} tone="blue" />
         <MetricCard label="Running jobs" value={summary.runningJobs} icon={<Activity size={18} />} tone="amber" />
       </div>
-      <div className="two-column">
+      <div className="dashboard-grid">
         <Panel title="Projects">
           {summary.projects.length ? (
             <div className="card-list">
@@ -724,6 +768,10 @@ function ProjectDetailView({ slug }: { slug: string }) {
   if (loading || !detail) return <Loading title="Loading project" />;
   const localAppUrl = findLocalAppUrl(detail.files["PROJECT.md"]);
   const runtime = projectRuntimeState(detail);
+  const activeJobs = detail.jobs.filter((job) => job.status === "queued" || job.status === "running");
+  const latestRun = detail.runs[0];
+  const activeRequests = detail.requests.filter(isActiveRequest);
+  const workBusy = busy || activeJobs.length > 0 || detail.agent_status === "queued" || detail.agent_status === "running";
   const primaryAction =
     detail.build_phase === "initial-build"
       ? { label: "Start initial build", title: "Queue the first local prototype build", onClick: initialBuild }
@@ -754,20 +802,8 @@ function ProjectDetailView({ slug }: { slug: string }) {
         title={detail.name}
         action={
           <div className="button-row">
-            <button className="button primary" onClick={primaryAction.onClick} disabled={busy} title={primaryAction.title}>
-              <PlayCircle size={16} /> {primaryAction.label}
-            </button>
-            <button className="button" onClick={heartbeat} disabled={busy} title="Queue a working-phase heartbeat">
-              <RefreshCw size={16} /> Heartbeat
-            </button>
-            <button className="button" onClick={() => navigator.clipboard?.writeText(detail.managerCommand)} title="Copy manager Codex command">
-              <Terminal size={16} /> {detail.codex_thread_id ? "Copy resume" : "Copy cd"}
-            </button>
-            <button className="button" onClick={() => fetchJson(`/api/projects/${slug}/open-folder`, { method: "POST" })} title="Open folder in Finder">
-              <ExternalLink size={16} /> Folder
-            </button>
             {localAppUrl ? (
-              <a className="button" href={localAppUrl} target="_blank" rel="noreferrer" title="Open local app URL">
+              <a className="button primary" href={localAppUrl} target="_blank" rel="noreferrer" title="Open local app URL">
                 <ExternalLink size={16} /> App
               </a>
             ) : (
@@ -775,23 +811,73 @@ function ProjectDetailView({ slug }: { slug: string }) {
                 <ExternalLink size={16} /> App
               </button>
             )}
+            <button className="button" onClick={() => fetchJson(`/api/projects/${slug}/open-folder`, { method: "POST" })} title="Open folder in Finder">
+              <ExternalLink size={16} /> Folder
+            </button>
           </div>
         }
       />
-      <div className="overview-band">
-        <p>{detail.one_liner}</p>
-        <div className="meta-row">
-          <Tag>{detail.status}</Tag>
-          <Tag>{detail.autonomy}</Tag>
-          <PhaseBadge phase={detail.build_phase} />
-          <Tag>agent {detail.agent_status}</Tag>
-          <Tag>{detail.last_heartbeat_at ? `heartbeat ${timeAgo(detail.last_heartbeat_at)}` : "no heartbeat"}</Tag>
-          <Tag>stale after {detail.stale_after_hours}h</Tag>
-          <Tag>{detail.path}</Tag>
+      <section className="project-hero">
+        <div className="project-hero-main">
+          <div className="meta-row">
+            <PhaseBadge phase={detail.build_phase} />
+            <RunBadge status={latestRun?.status ?? null} label={latestRun ? `last ${latestRun.status}` : "no run"} />
+            <Tag>{detail.autonomy}</Tag>
+            <Tag>{detail.status}</Tag>
+          </div>
+          <h2>{detail.current_now_task ?? "No current task"}</h2>
+          <p>{detail.one_liner}</p>
+          <div className="project-path-line">
+            <code>{detail.path}</code>
+          </div>
         </div>
-      </div>
+        <aside className="project-action-panel">
+          <span className="section-kicker">Next action</span>
+          <strong>{primaryAction.label}</strong>
+          <p>{activeJobs.length ? `${activeJobs.length} active job already in flight.` : primaryAction.title}</p>
+          <div className="button-column">
+            <button className="button primary" onClick={primaryAction.onClick} disabled={workBusy} title={primaryAction.title}>
+              <PlayCircle size={16} /> {primaryAction.label}
+            </button>
+            <button className="button" onClick={heartbeat} disabled={workBusy} title="Queue a working-phase heartbeat">
+              <RefreshCw size={16} /> Heartbeat
+            </button>
+            <button className="button" onClick={() => navigator.clipboard?.writeText(detail.managerCommand)} title="Copy manager Codex command">
+              <Terminal size={16} /> {detail.codex_thread_id ? "Copy resume command" : "Copy start command"}
+            </button>
+          </div>
+        </aside>
+      </section>
 
       <div className="status-grid">
+        <article className="status-tile prominent">
+          <span>Agent state</span>
+          <strong>{runtime.title}</strong>
+          <p>{runtime.body}</p>
+          <RunBadge status={runtime.badgeStatus} label={runtime.badgeLabel} />
+        </article>
+        <article className="status-tile">
+          <span>Latest run</span>
+          <strong>{latestRun ? latestRun.run_type : "No runs"}</strong>
+          <p>{latestRun ? shortText(latestRun.summary || latestRun.error || `Updated ${timeAgo(latestRun.updated_at)}`, 260) : "Queue an initial build or heartbeat to create a run."}</p>
+          <RunBadge status={latestRun?.status ?? null} />
+        </article>
+        <article className="status-tile">
+          <span>Manager thread</span>
+          <strong>{detail.codex_thread_id ? shortId(detail.codex_thread_id) : "Not started"}</strong>
+          <p>{detail.codex_thread_id ? "Worker turns resume this same Codex session." : "Start initial build to create the persistent manager session."}</p>
+          <button className="button" type="button" onClick={() => navigator.clipboard?.writeText(detail.managerCommand)}>
+            <Terminal size={16} /> Copy command
+          </button>
+        </article>
+        <article className="status-tile">
+          <span>Human queue</span>
+          <strong>{activeRequests.length} active</strong>
+          <p>{activeRequests.length ? "Open inbox to answer or clear surfaced requests." : "No active inbox blockers or approvals."}</p>
+          <a className="button" href="#/inbox">
+            <Inbox size={16} /> Inbox
+          </a>
+        </article>
         <article className="status-tile">
           <span>Build phase</span>
           <strong>{phaseTitle(detail.build_phase)}</strong>
@@ -816,23 +902,10 @@ function ProjectDetailView({ slug }: { slug: string }) {
           </div>
         </article>
         <article className="status-tile">
-          <span>Agent state</span>
-          <strong>{runtime.title}</strong>
-          <p>{runtime.body}</p>
-          <RunBadge status={runtime.badgeStatus} label={runtime.badgeLabel} />
-        </article>
-        <article className="status-tile">
-          <span>Manager thread</span>
-          <strong>{detail.codex_thread_id ? shortId(detail.codex_thread_id) : "Not started"}</strong>
-          <p>{detail.codex_thread_id ? "Future worker turns resume this same Codex session." : "Start initial build to create the persistent Codex manager session."}</p>
-          <button className="button" type="button" onClick={() => navigator.clipboard?.writeText(detail.managerCommand)}>
-            <Terminal size={16} /> {detail.codex_thread_id ? "Copy resume" : "Copy start"}
-          </button>
-        </article>
-        <article className="status-tile">
-          <span>Current task</span>
-          <strong>{detail.current_now_task ?? "No Now item"}</strong>
-          <p>{detail.current_now_task ? "The next queued worker run should take this first." : "Add feedback or edit QUEUE.md to steer the next run."}</p>
+          <span>Cadence</span>
+          <strong>{detail.stale_after_hours}h stale window</strong>
+          <p>{detail.auto_queue_when_stale ? "Auto-queue is enabled." : "Auto-queue is off; work starts from explicit actions."}</p>
+          <Tag>{detail.last_heartbeat_at ? `heartbeat ${timeAgo(detail.last_heartbeat_at)}` : "no heartbeat"}</Tag>
         </article>
       </div>
 
@@ -950,6 +1023,8 @@ function InboxView() {
   const load = async () => setItems(await fetchJson<RequestRecord[]>("/api/inbox?includeDone=true"));
   useEffect(() => {
     load().catch(console.error);
+    const id = window.setInterval(() => load().catch(console.error), 5000);
+    return () => window.clearInterval(id);
   }, []);
 
   const filtered = items.filter((item) => requestMatchesFilter(item, filter));
@@ -975,6 +1050,8 @@ function OpsView() {
 
   useEffect(() => {
     load().catch(console.error);
+    const id = window.setInterval(() => load().catch(console.error), 5000);
+    return () => window.clearInterval(id);
   }, []);
 
   const filtered = items.filter((item) => requestMatchesFilter(item, filter));
@@ -1004,6 +1081,10 @@ function RequestPage(props: {
   setFilter: (filter: string) => void;
 }) {
   const stats = useMemo(() => requestStats(props.allItems), [props.allItems]);
+  const filterCounts = useMemo(
+    () => Object.fromEntries(props.filters.map((filter) => [filter, props.allItems.filter((item) => requestMatchesFilter(item, filter)).length])),
+    [props.allItems, props.filters]
+  ) as Record<string, number>;
 
   return (
     <section className="page-stack">
@@ -1017,7 +1098,8 @@ function RequestPage(props: {
       <div className="tab-row">
         {props.filters.map((filter) => (
           <button className={props.activeFilter === filter ? "tab active" : "tab"} key={filter} onClick={() => props.setFilter(filter)}>
-            {filter}
+            <span>{filter}</span>
+            <b>{filterCounts[filter] ?? 0}</b>
           </button>
         ))}
       </div>
@@ -1038,6 +1120,7 @@ function RequestCard({ item, reload }: { item: RequestRecord; reload: () => Prom
   const [response, setResponse] = useState("");
   const [busy, setBusy] = useState(false);
   const archived = isArchivedRequest(item);
+  const intent = requestIntent(item);
 
   const update = async (status: RequestStatus) => {
     setBusy(true);
@@ -1070,18 +1153,27 @@ function RequestCard({ item, reload }: { item: RequestRecord; reload: () => Prom
   return (
     <article className="request-card">
       <div className="request-body">
+        <div className="request-card-head">
+          <div>
+            <span className="section-kicker">{intent}</span>
+            <h3>{item.title}</h3>
+          </div>
+          <a className="button" href={`#/projects/${item.project_slug}`}>
+            <ExternalLink size={15} /> Project
+          </a>
+        </div>
         <div className="meta-row">
           <Tag>{item.project_slug}</Tag>
           <Tag>{item.type}</Tag>
           <Tag>{item.risk} risk</Tag>
+          <Tag>{timeAgo(item.updated_at)}</Tag>
           <RunBadge status={item.status === "done" ? "succeeded" : item.status === "failed" ? "failed" : "queued"} label={item.status} />
         </div>
-        <h3>{item.title}</h3>
-        <p>{item.body}</p>
+        <p className="request-copy">{item.body}</p>
         {item.thread.trim() && <pre className="request-thread">{item.thread}</pre>}
         {!archived && (
           <label className="field response-field">
-            <span>Respond and queue follow-up</span>
+            <span>{itemNeedsResponse(item) ? "Respond and queue follow-up" : "Optional note before archiving"}</span>
             <textarea
               value={response}
               onChange={(event) => setResponse(event.target.value)}
@@ -1091,6 +1183,7 @@ function RequestCard({ item, reload }: { item: RequestRecord; reload: () => Prom
         )}
       </div>
       <div className="request-actions">
+        <span className="section-kicker">Resolve</span>
         {!archived && (
           <button className="button primary" onClick={respond} disabled={busy || !response.trim()}>
             <Send size={15} /> Respond
@@ -1108,6 +1201,8 @@ function RequestCard({ item, reload }: { item: RequestRecord; reload: () => Prom
 function RunsView() {
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [jobs, setJobs] = useState<JobRecord[]>([]);
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState("all");
   const load = async () => {
     const [nextRuns, nextJobs] = await Promise.all([
       fetchJson<RunRecord[]>("/api/runs"),
@@ -1123,6 +1218,15 @@ function RunsView() {
     return () => window.clearInterval(id);
   }, []);
 
+  const filteredRuns = runs.filter((run) => {
+    const statusMatches = statusFilter === "all" || run.status === statusFilter;
+    const typeMatches = typeFilter === "all" || run.run_type === typeFilter;
+    return statusMatches && typeMatches;
+  });
+  const activeJobs = jobs.filter((job) => job.status === "queued" || job.status === "running");
+  const runTypes = ["all", ...Array.from(new Set(runs.map((run) => run.run_type)))];
+  const runStatuses = ["all", "succeeded", "failed", "running", "queued", "interrupted"];
+
   return (
     <section className="page-stack">
       <Header
@@ -1134,10 +1238,40 @@ function RunsView() {
           </button>
         }
       />
-      <Panel title="Job queue">
-        <JobList jobs={jobs} />
+      <div className="metric-grid compact-metrics">
+        <MetricCard label="Active jobs" value={activeJobs.length} icon={<Activity size={18} />} tone={activeJobs.length ? "amber" : "green"} />
+        <MetricCard label="Succeeded" value={runs.filter((run) => run.status === "succeeded").length} icon={<CheckCircle2 size={18} />} />
+        <MetricCard label="Failed" value={runs.filter((run) => run.status === "failed").length} icon={<AlertCircle size={18} />} tone="red" />
+        <MetricCard label="Queued" value={runs.filter((run) => run.status === "queued").length} icon={<ClipboardList size={18} />} tone="blue" />
+      </div>
+      <div className="runs-layout">
+        <Panel title="Active job queue">
+          <JobList jobs={activeJobs} />
+        </Panel>
+        <Panel title="Run filters">
+          <div className="filter-stack">
+            <span className="section-kicker">Status</span>
+            <div className="tab-row">
+              {runStatuses.map((status) => (
+                <button className={statusFilter === status ? "tab active" : "tab"} key={status} onClick={() => setStatusFilter(status)}>
+                  {status}
+                </button>
+              ))}
+            </div>
+            <span className="section-kicker">Type</span>
+            <div className="tab-row">
+              {runTypes.map((type) => (
+                <button className={typeFilter === type ? "tab active" : "tab"} key={type} onClick={() => setTypeFilter(type)}>
+                  {type}
+                </button>
+              ))}
+            </div>
+          </div>
+        </Panel>
+      </div>
+      <Panel title={`${filteredRuns.length} runs`}>
+        <RunList runs={filteredRuns} />
       </Panel>
-      <RunList runs={runs} />
     </section>
   );
 }
@@ -1183,12 +1317,18 @@ function RunList({ runs, compact = false }: { runs: RunRecord[]; compact?: boole
             <RunBadge status={run.status} />
             <strong>{run.run_type}</strong>
             <span>{run.project_slug}</span>
-            <span>{timeAgo(run.created_at)}</span>
+            <span>{run.finished_at ? `finished ${timeAgo(run.finished_at)}` : `created ${timeAgo(run.created_at)}`}</span>
+            <span>{shortId(run.id)}</span>
           </div>
           {!compact && (
             <>
-              <p>{run.summary || run.error || "Queued. Waiting for the local worker."}</p>
-              {run.logs && <pre>{run.logs.slice(-2500)}</pre>}
+              <p>{shortText(run.summary || run.error || "Queued. Waiting for the local worker.", 520)}</p>
+              {run.logs && (
+                <details className="log-details">
+                  <summary>Show latest log output</summary>
+                  <pre>{run.logs.slice(-3200)}</pre>
+                </details>
+              )}
             </>
           )}
         </article>
@@ -1376,6 +1516,18 @@ function requestStats(items: RequestRecord[]) {
     approvals: items.filter((item) => requestMatchesFilter(item, "approvals")).length,
     archive: items.filter(isArchivedRequest).length
   };
+}
+
+function requestIntent(item: RequestRecord): string {
+  if (["marketing_approval", "deploy_approval"].includes(item.type)) return "Approval request";
+  if (["browser_ops", "account_setup", "captcha_needed", "login_needed", "payment_needed"].includes(item.type)) return "External action";
+  if (["blocked", "failed"].includes(item.status) || item.type === "blocked") return "Blocked work";
+  if (itemNeedsResponse(item)) return "Question";
+  return "Triage item";
+}
+
+function itemNeedsResponse(item: RequestRecord): boolean {
+  return ["needs_julian", "secret_needed", "code_review", "general", "blocked"].includes(item.type);
 }
 
 function projectRuntimeState(detail: ProjectDetail): {
