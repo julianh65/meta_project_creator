@@ -1,0 +1,9 @@
+{
+  "name": "@startup-os/dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@startup-os/shared": "file:../../packages/shared"
+  }
+}
