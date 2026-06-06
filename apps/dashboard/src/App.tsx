@@ -28,6 +28,7 @@ import type {
   ProjectDetail,
   ProjectDraft,
   ProjectFileName,
+  ProjectPhase,
   ProjectRecord,
   ProjectType,
   RequestRecord,
@@ -194,24 +195,54 @@ function DocsView() {
               title="Worker is the executor"
               body="The local worker polls SQLite for queued jobs. If it is offline, jobs wait. If it is online, it claims jobs and runs either dry-run mode or your configured Codex command."
             />
+            <ExplainItem
+              icon={<MessageSquarePlus size={18} />}
+              title="Each project gets a manager thread"
+              body="Real worker runs create or resume one persisted Codex session per project. The session ID is stored in PROJECT.md, and the project page gives you a codex resume command for manual takeover."
+            />
           </div>
         </Panel>
 
         <Panel title="After you create a project">
           <ol className="step-list">
             <li>Open the project detail page.</li>
-            <li>Review PROJECT.md and QUEUE.md. The first useful task should be under QUEUE.md &gt; Now.</li>
+            <li>Review PROJECT.md and QUEUE.md. New ideas start in the initial-build phase.</li>
             <li>Start the worker in another terminal.</li>
-            <li>Click Heartbeat to queue one autonomous work cycle.</li>
+            <li>Click Start initial build to queue the first local prototype build.</li>
             <li>Watch Jobs for queued/running state and Runs for logs/results.</li>
+            <li>When the first local demo works, mark the project working and use heartbeats for normal iteration.</li>
             <li>Use the inbox to answer questions or approve/deny external requests.</li>
           </ol>
           <div className="command-box">
             <code>npm run dev:worker</code>
           </div>
           <div className="command-box">
-            <code>STARTUP_OS_DRY_RUN=false CODEX_COMMAND_TEMPLATE='codex {"{prompt}"}' npm run dev:worker</code>
+            <code>STARTUP_OS_DRY_RUN=false npm run dev:worker</code>
           </div>
+        </Panel>
+
+        <Panel title="Project phases">
+          <div className="explain-list">
+            <ExplainItem
+              icon={<PlayCircle size={18} />}
+              title="Initial build"
+              body="The agent should create the first demonstrable local prototype, mock or defer external dependencies, and update PROJECT.md with how to run or view the demo."
+            />
+            <ExplainItem
+              icon={<RefreshCw size={18} />}
+              title="Working"
+              body="After a first demo exists, heartbeats become normal autonomous work cycles for improving, testing, documenting, and responding to feedback."
+            />
+          </div>
+        </Panel>
+
+        <Panel title="Manager threads and subagents">
+          <p className="docs-copy">
+            The project manager is a persistent Codex conversation. Initial builds, heartbeats, and feedback are sent as new turns in that same thread, so the manager keeps context beyond one worker job.
+          </p>
+          <p className="docs-copy">
+            During a turn, the manager prompt allows bounded subagents for exploration, implementation, testing, or review. The main manager thread should keep the durable decisions and summarize subagent results.
+          </p>
         </Panel>
 
         <Panel title="What a heartbeat is">
@@ -296,11 +327,13 @@ function ProjectsView() {
 
 function ProjectCard({ project, reload }: { project: ProjectRecord; reload: () => Promise<void> }) {
   const [busy, setBusy] = useState(false);
+  const actionEndpoint = project.build_phase === "initial-build" ? "initial-build" : "heartbeat";
+  const actionLabel = project.build_phase === "initial-build" ? "Start build" : "Heartbeat";
 
-  const runHeartbeat = async () => {
+  const startWork = async () => {
     setBusy(true);
     try {
-      await fetchJson(`/api/projects/${project.slug}/heartbeat`, { method: "POST" });
+      await fetchJson(`/api/projects/${project.slug}/${actionEndpoint}`, { method: "POST" });
       await reload();
     } finally {
       setBusy(false);
@@ -320,6 +353,8 @@ function ProjectCard({ project, reload }: { project: ProjectRecord; reload: () =
         <Tag>{project.type}</Tag>
         <Tag>{project.autonomy}</Tag>
         <Tag>{project.status}</Tag>
+        <PhaseBadge phase={project.build_phase} />
+        <Tag>agent {project.agent_status}</Tag>
       </div>
       <div className="now-task">
         <span>Now</span>
@@ -334,8 +369,8 @@ function ProjectCard({ project, reload }: { project: ProjectRecord; reload: () =
         <a className="button" href={`#/projects/${project.slug}`}>
           <ExternalLink size={15} /> Open
         </a>
-        <button className="button" type="button" onClick={runHeartbeat} disabled={busy}>
-          <PlayCircle size={15} /> Heartbeat
+        <button className="button" type="button" onClick={startWork} disabled={busy}>
+          <PlayCircle size={15} /> {actionLabel}
         </button>
       </div>
     </article>
@@ -354,7 +389,7 @@ function NewProjectView() {
   });
   const [draft, setDraft] = useState<ProjectDraft | null>(null);
   const [scaffold, setScaffold] = useState(false);
-  const [runFirstHeartbeat, setRunFirstHeartbeat] = useState(false);
+  const [runInitialBuild, setRunInitialBuild] = useState(false);
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<ProjectRecord | null>(null);
 
@@ -378,7 +413,7 @@ function NewProjectView() {
     try {
       const project = await fetchJson<ProjectRecord>("/api/projects", {
         method: "POST",
-        body: JSON.stringify({ draft, scaffold, runFirstHeartbeat })
+        body: JSON.stringify({ draft, scaffold, runInitialBuild })
       });
       setCreated(project);
       window.location.hash = `/projects/${project.slug}`;
@@ -442,8 +477,8 @@ function NewProjectView() {
           setDraft={setDraft}
           scaffold={scaffold}
           setScaffold={setScaffold}
-          runFirstHeartbeat={runFirstHeartbeat}
-          setRunFirstHeartbeat={setRunFirstHeartbeat}
+          runInitialBuild={runInitialBuild}
+          setRunInitialBuild={setRunInitialBuild}
           create={create}
           busy={busy}
         />
@@ -458,8 +493,8 @@ function ProposalEditor(props: {
   setDraft: (draft: ProjectDraft) => void;
   scaffold: boolean;
   setScaffold: (value: boolean) => void;
-  runFirstHeartbeat: boolean;
-  setRunFirstHeartbeat: (value: boolean) => void;
+  runInitialBuild: boolean;
+  setRunInitialBuild: (value: boolean) => void;
   create: () => Promise<void>;
   busy: boolean;
 }) {
@@ -507,7 +542,7 @@ function ProposalEditor(props: {
         </label>
         <div className="toggle-row">
           <label><input type="checkbox" checked={props.scaffold} onChange={(event) => props.setScaffold(event.target.checked)} /> Scaffold starter code</label>
-          <label><input type="checkbox" checked={props.runFirstHeartbeat} onChange={(event) => props.setRunFirstHeartbeat(event.target.checked)} /> Queue first heartbeat</label>
+          <label><input type="checkbox" checked={props.runInitialBuild} onChange={(event) => props.setRunInitialBuild(event.target.checked)} /> Queue initial build</label>
         </div>
       </Panel>
 
@@ -579,6 +614,29 @@ function ProjectDetailView({ slug }: { slug: string }) {
     }
   };
 
+  const initialBuild = async () => {
+    setBusy(true);
+    try {
+      await fetchJson(`/api/projects/${slug}/initial-build`, { method: "POST" });
+      await load({ syncFile: false });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const updatePhase = async (phase: ProjectPhase) => {
+    setBusy(true);
+    try {
+      await fetchJson(`/api/projects/${slug}/phase`, {
+        method: "PATCH",
+        body: JSON.stringify({ phase })
+      });
+      await load({ syncFile: true });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const submitFeedback = async () => {
     if (!feedback.trim()) return;
     setBusy(true);
@@ -610,6 +668,11 @@ function ProjectDetailView({ slug }: { slug: string }) {
 
   if (loading || !detail) return <Loading title="Loading project" />;
   const localAppUrl = findLocalAppUrl(detail.files["PROJECT.md"]);
+  const runtime = projectRuntimeState(detail);
+  const primaryAction =
+    detail.build_phase === "initial-build"
+      ? { label: "Start initial build", title: "Queue the first local prototype build", onClick: initialBuild }
+      : { label: "Run heartbeat", title: "Queue one working-phase autonomous cycle", onClick: heartbeat };
 
   const saveCadence = async () => {
     setBusy(true);
@@ -636,11 +699,14 @@ function ProjectDetailView({ slug }: { slug: string }) {
         title={detail.name}
         action={
           <div className="button-row">
-            <button className="button primary" onClick={heartbeat} disabled={busy} title="Queue heartbeat">
-              <PlayCircle size={16} /> Heartbeat
+            <button className="button primary" onClick={primaryAction.onClick} disabled={busy} title={primaryAction.title}>
+              <PlayCircle size={16} /> {primaryAction.label}
             </button>
-            <button className="button" onClick={() => navigator.clipboard?.writeText(detail.manualCommand)} title="Copy manual Codex command">
-              <Terminal size={16} /> Copy cd
+            <button className="button" onClick={heartbeat} disabled={busy} title="Queue a working-phase heartbeat">
+              <RefreshCw size={16} /> Heartbeat
+            </button>
+            <button className="button" onClick={() => navigator.clipboard?.writeText(detail.managerCommand)} title="Copy manager Codex command">
+              <Terminal size={16} /> {detail.codex_thread_id ? "Copy resume" : "Copy cd"}
             </button>
             <button className="button" onClick={() => fetchJson(`/api/projects/${slug}/open-folder`, { method: "POST" })} title="Open folder in Finder">
               <ExternalLink size={16} /> Folder
@@ -662,10 +728,57 @@ function ProjectDetailView({ slug }: { slug: string }) {
         <div className="meta-row">
           <Tag>{detail.status}</Tag>
           <Tag>{detail.autonomy}</Tag>
+          <PhaseBadge phase={detail.build_phase} />
+          <Tag>agent {detail.agent_status}</Tag>
           <Tag>{detail.last_heartbeat_at ? `heartbeat ${timeAgo(detail.last_heartbeat_at)}` : "no heartbeat"}</Tag>
           <Tag>stale after {detail.stale_after_hours}h</Tag>
           <Tag>{detail.path}</Tag>
         </div>
+      </div>
+
+      <div className="status-grid">
+        <article className="status-tile">
+          <span>Build phase</span>
+          <strong>{phaseTitle(detail.build_phase)}</strong>
+          <p>{detail.build_phase === "initial-build" ? "First local demo is not confirmed yet." : "Normal iteration mode."}</p>
+          <div className="button-row">
+            <button
+              className="button"
+              type="button"
+              onClick={() => updatePhase("initial-build")}
+              disabled={busy || detail.build_phase === "initial-build"}
+            >
+              Initial build
+            </button>
+            <button
+              className="button"
+              type="button"
+              onClick={() => updatePhase("working")}
+              disabled={busy || detail.build_phase === "working"}
+            >
+              Working
+            </button>
+          </div>
+        </article>
+        <article className="status-tile">
+          <span>Agent state</span>
+          <strong>{runtime.title}</strong>
+          <p>{runtime.body}</p>
+          <RunBadge status={runtime.badgeStatus} label={runtime.badgeLabel} />
+        </article>
+        <article className="status-tile">
+          <span>Manager thread</span>
+          <strong>{detail.codex_thread_id ? shortId(detail.codex_thread_id) : "Not started"}</strong>
+          <p>{detail.codex_thread_id ? "Future worker turns resume this same Codex session." : "Start initial build to create the persistent Codex manager session."}</p>
+          <button className="button" type="button" onClick={() => navigator.clipboard?.writeText(detail.managerCommand)}>
+            <Terminal size={16} /> {detail.codex_thread_id ? "Copy resume" : "Copy start"}
+          </button>
+        </article>
+        <article className="status-tile">
+          <span>Current task</span>
+          <strong>{detail.current_now_task ?? "No Now item"}</strong>
+          <p>{detail.current_now_task ? "The next queued worker run should take this first." : "Add feedback or edit QUEUE.md to steer the next run."}</p>
+        </article>
       </div>
 
       <div className="two-column">
@@ -685,7 +798,8 @@ function ProjectDetailView({ slug }: { slug: string }) {
               <Send size={16} /> Add feedback
             </button>
           </div>
-          <div className="command-box"><code>{detail.manualCommand}</code></div>
+          <div className="command-box"><code>{detail.managerCommand}</code></div>
+          {detail.codex_thread_id && <div className="command-box"><code>{detail.managerExecCommand}</code></div>}
           <div className="cadence-box">
             <label className="field">
               <span>Stale after hours</span>
@@ -1026,7 +1140,10 @@ function ProjectRow({ project }: { project: ProjectRecord }) {
         <strong>{project.name}</strong>
         <span>{project.current_now_task ?? "No Now item"}</span>
       </div>
-      <RunBadge status={project.recent_run_status ?? null} />
+      <div className="row-badges">
+        <PhaseBadge phase={project.build_phase} />
+        <RunBadge status={project.recent_run_status ?? null} />
+      </div>
     </a>
   );
 }
@@ -1098,6 +1215,14 @@ function StatusPill({ status }: { status: "online" | "offline" }) {
 function RunBadge({ status, label }: { status: string | null; label?: string }) {
   const safe = status ?? "none";
   return <span className={`run-badge ${safe}`}>{label ?? safe}</span>;
+}
+
+function PhaseBadge({ phase }: { phase: ProjectPhase }) {
+  return <span className={`phase-badge ${phase}`}>{phaseTitle(phase)}</span>;
+}
+
+function phaseTitle(phase: ProjectPhase): string {
+  return phase === "initial-build" ? "Initial build" : "Working";
 }
 
 function TextField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
@@ -1189,6 +1314,86 @@ function requestStats(items: RequestRecord[]) {
   };
 }
 
+function projectRuntimeState(detail: ProjectDetail): {
+  title: string;
+  body: string;
+  badgeStatus: string | null;
+  badgeLabel: string;
+} {
+  const running = detail.jobs.find((job) => job.status === "running");
+  if (running) {
+    return {
+      title: `${running.job_type} running`,
+      body: `${running.worker_id ? `Worker ${running.worker_id}` : "A worker"} started this ${timeAgo(running.started_at ?? running.updated_at)}.`,
+      badgeStatus: "running",
+      badgeLabel: "live"
+    };
+  }
+
+  const queued = detail.jobs.find((job) => job.status === "queued");
+  if (queued) {
+    return {
+      title: `${queued.job_type} queued`,
+      body: "The job is waiting for the local worker to come online and claim it.",
+      badgeStatus: "queued",
+      badgeLabel: "queued"
+    };
+  }
+
+  const latest = detail.runs[0];
+  if (detail.agent_status === "queued") {
+    return {
+      title: "Manager queued",
+      body: detail.agent_goal ? `Waiting to work on: ${detail.agent_goal}` : "The manager turn is waiting for the local worker.",
+      badgeStatus: "queued",
+      badgeLabel: "queued"
+    };
+  }
+
+  if (detail.agent_status === "running") {
+    return {
+      title: "Manager running",
+      body: detail.last_agent_update_at ? `Last manager update ${timeAgo(detail.last_agent_update_at)}.` : "The manager turn is active.",
+      badgeStatus: "running",
+      badgeLabel: "live"
+    };
+  }
+
+  if (detail.agent_status === "failed" && !latest) {
+    return {
+      title: "Manager failed",
+      body: "Open Jobs or Runs for the last error.",
+      badgeStatus: "failed",
+      badgeLabel: "failed"
+    };
+  }
+
+  if (latest?.status === "failed" || latest?.status === "interrupted") {
+    return {
+      title: `Last run ${latest.status}`,
+      body: latest.error || "Open Recent runs for the latest command output.",
+      badgeStatus: latest.status,
+      badgeLabel: latest.status
+    };
+  }
+
+  if (latest?.status === "succeeded") {
+    return {
+      title: "Idle",
+      body: `Last ${latest.run_type} succeeded ${timeAgo(latest.finished_at ?? latest.updated_at)}.`,
+      badgeStatus: "succeeded",
+      badgeLabel: "idle"
+    };
+  }
+
+  return {
+    title: "Idle",
+    body: "No queued or running job for this project.",
+    badgeStatus: null,
+    badgeLabel: "idle"
+  };
+}
+
 function shortText(value: string, limit: number): string {
   const normalized = value.replace(/\s+/g, " ").trim();
   return normalized.length > limit ? `${normalized.slice(0, limit - 3)}...` : normalized;
@@ -1196,6 +1401,10 @@ function shortText(value: string, limit: number): string {
 
 function findLocalAppUrl(markdown: string): string {
   return markdown.match(/https?:\/\/(?:localhost|127\.0\.0\.1):\d+[^\s)]*/)?.[0] ?? "";
+}
+
+function shortId(value: string): string {
+  return value.length > 12 ? `${value.slice(0, 8)}...${value.slice(-4)}` : value;
 }
 
 function replaceMarkdownSection(markdown: string, heading: string, body: string): string {

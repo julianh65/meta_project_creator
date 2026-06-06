@@ -11,9 +11,10 @@ import {
   parseProjectMarkdown,
   parseQueue,
   recentLogEntries,
+  replaceMarkdownSection,
   stableId
 } from "./markdown";
-import { createScaffold, HEARTBEAT_PROMPT } from "./templates";
+import { createScaffold, HEARTBEAT_PROMPT, INITIAL_BUILD_PROMPT } from "./templates";
 import {
   DashboardSummary,
   JobRecord,
@@ -21,6 +22,8 @@ import {
   ProjectDetail,
   ProjectDraft,
   ProjectFileName,
+  ProjectAgentStatus,
+  ProjectPhase,
   ProjectRecord,
   RequestRecord,
   RequestStatus,
@@ -35,6 +38,7 @@ const OPEN_REQUEST_STATUSES: RequestStatus[] = ["open", "queued", "running", "ne
 
 export interface CreateProjectOptions {
   scaffold?: boolean;
+  runInitialBuild?: boolean;
   runFirstHeartbeat?: boolean;
 }
 
@@ -65,6 +69,12 @@ export class StartupStorage {
         type TEXT NOT NULL,
         autonomy TEXT NOT NULL,
         status TEXT NOT NULL,
+        build_phase TEXT NOT NULL DEFAULT 'initial-build',
+        codex_thread_id TEXT,
+        agent_status TEXT NOT NULL DEFAULT 'idle',
+        active_turn_id TEXT,
+        agent_goal TEXT,
+        last_agent_update_at TEXT,
         one_liner TEXT NOT NULL DEFAULT '',
         current_now_task TEXT,
         created_at TEXT NOT NULL,
@@ -140,6 +150,12 @@ export class StartupStorage {
       CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_slug, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, priority DESC, created_at ASC);
     `);
+    this.ensureColumn("projects", "build_phase", "TEXT NOT NULL DEFAULT 'initial-build'");
+    this.ensureColumn("projects", "codex_thread_id", "TEXT");
+    this.ensureColumn("projects", "agent_status", "TEXT NOT NULL DEFAULT 'idle'");
+    this.ensureColumn("projects", "active_turn_id", "TEXT");
+    this.ensureColumn("projects", "agent_goal", "TEXT");
+    this.ensureColumn("projects", "last_agent_update_at", "TEXT");
     this.ensureColumn("projects", "stale_after_hours", "INTEGER NOT NULL DEFAULT 168");
     this.ensureColumn("projects", "auto_queue_when_stale", "INTEGER NOT NULL DEFAULT 0");
   }
@@ -248,7 +264,13 @@ export class StartupStorage {
       runs: this.listRuns(20, slug),
       jobs: this.listJobs({ projectSlug: slug, limit: 20, includeFinished: true }),
       recentLogEntries: recentLogEntries(files["LOG.md"] ?? "", 10),
-      manualCommand: `cd ${project.path} && codex`
+      manualCommand: `cd ${shellQuote(project.path)} && codex`,
+      managerCommand: project.codex_thread_id
+        ? `cd ${shellQuote(project.path)} && codex resume --include-non-interactive ${project.codex_thread_id}`
+        : `cd ${shellQuote(project.path)} && codex`,
+      managerExecCommand: project.codex_thread_id
+        ? `cd ${shellQuote(project.path)} && codex exec resume ${project.codex_thread_id}`
+        : `cd ${shellQuote(project.path)} && codex exec`
     };
   }
 
@@ -287,8 +309,8 @@ export class StartupStorage {
       throw new Error("Project was created but could not be synced from Markdown files.");
     }
 
-    if (options.runFirstHeartbeat) {
-      this.enqueueRun(slug, "heartbeat", HEARTBEAT_PROMPT, 5);
+    if (options.runInitialBuild ?? options.runFirstHeartbeat) {
+      this.enqueueInitialBuild(slug);
     }
 
     return project;
@@ -349,6 +371,60 @@ Incorporate the feedback in one scoped work cycle. Update QUEUE.md and LOG.md wh
     return this.enqueueRun(slug, "heartbeat", HEARTBEAT_PROMPT, 5);
   }
 
+  enqueueInitialBuild(slug: string): RunRecord {
+    const existing = this.db
+      .prepare(
+        `SELECT run_id FROM jobs
+         WHERE project_slug = ? AND job_type = 'initial-build' AND status IN ('queued','running')
+         ORDER BY created_at DESC
+         LIMIT 1`
+      )
+      .get(slug) as { run_id: string } | undefined;
+    if (existing) {
+      return this.getRun(existing.run_id);
+    }
+
+    const project = this.getProjectBySlug(slug);
+    if (!project) {
+      throw new Error(`Unknown project: ${slug}`);
+    }
+
+    if (project.build_phase !== "initial-build") {
+      this.updateProjectPhase(slug, "initial-build");
+    }
+
+    const logPath = path.join(project.path, "LOG.md");
+    fs.writeFileSync(
+      logPath,
+      appendLogEntry(readIfExists(logPath), "Initial build queued."),
+      "utf8"
+    );
+    this.syncProjectFromFiles(slug);
+
+    return this.enqueueRun(slug, "initial-build", INITIAL_BUILD_PROMPT, 20);
+  }
+
+  updateProjectPhase(slug: string, phase: ProjectPhase): ProjectRecord | null {
+    const project = this.getProjectBySlug(slug);
+    if (!project) {
+      throw new Error(`Unknown project: ${slug}`);
+    }
+
+    const projectPath = path.join(project.path, "PROJECT.md");
+    const logPath = path.join(project.path, "LOG.md");
+    fs.writeFileSync(
+      projectPath,
+      replaceMarkdownSection(readIfExists(projectPath), "Build phase", phase),
+      "utf8"
+    );
+    fs.writeFileSync(
+      logPath,
+      appendLogEntry(readIfExists(logPath), `Build phase changed to ${phase}.`),
+      "utf8"
+    );
+    return this.syncProjectFromFiles(slug);
+  }
+
   enqueueRun(slug: string, runType: RunType, prompt: string, priority = 0): RunRecord {
     const project = this.getProjectBySlug(slug);
     if (!project) {
@@ -372,7 +448,79 @@ Incorporate the feedback in one scoped work cycle. Update QUEUE.md and LOG.md wh
       )
       .run(jobId, project.id, project.slug, runId, runType, prompt, priority, created, created);
 
+    this.updateProjectAgentState(slug, {
+      agent_status: "queued",
+      active_turn_id: runId,
+      agent_goal: runType === "initial-build" ? "Create the first demonstrable local prototype." : project.current_now_task,
+      last_agent_update_at: created
+    });
+
     return this.getRun(runId);
+  }
+
+  setProjectCodexThread(slug: string, threadId: string): ProjectRecord | null {
+    const project = this.getProjectBySlug(slug, false) ?? this.syncProjectFromFiles(slug);
+    if (!project) {
+      throw new Error(`Unknown project: ${slug}`);
+    }
+
+    const projectPath = path.join(project.path, "PROJECT.md");
+    const logPath = path.join(project.path, "LOG.md");
+    fs.writeFileSync(
+      projectPath,
+      replaceMarkdownSection(readIfExists(projectPath), "Codex manager thread", threadId),
+      "utf8"
+    );
+    if (project.codex_thread_id !== threadId) {
+      fs.writeFileSync(
+        logPath,
+        appendLogEntry(readIfExists(logPath), `Codex manager thread set to ${threadId}.`),
+        "utf8"
+      );
+    }
+
+    const updated = nowIso();
+    this.db
+      .prepare("UPDATE projects SET codex_thread_id = ?, last_agent_update_at = ?, updated_at = ? WHERE slug = ?")
+      .run(threadId, updated, updated, slug);
+    return this.syncProjectFromFiles(slug);
+  }
+
+  updateProjectAgentState(
+    slug: string,
+    patch: Partial<Pick<ProjectRecord, "agent_status" | "active_turn_id" | "agent_goal" | "last_agent_update_at">>
+  ): ProjectRecord | null {
+    const project = this.getProjectBySlug(slug, false) ?? this.syncProjectFromFiles(slug);
+    if (!project) {
+      throw new Error(`Unknown project: ${slug}`);
+    }
+
+    const agentStatus = patch.agent_status ?? project.agent_status;
+    if (!isProjectAgentStatus(agentStatus)) {
+      throw new Error(`Unsupported agent status: ${agentStatus}`);
+    }
+
+    const updated = nowIso();
+    const lastAgentUpdate = patch.last_agent_update_at ?? updated;
+    this.db
+      .prepare(
+        `UPDATE projects
+         SET agent_status = ?,
+             active_turn_id = ?,
+             agent_goal = ?,
+             last_agent_update_at = ?,
+             updated_at = ?
+         WHERE slug = ?`
+      )
+      .run(
+        agentStatus,
+        patch.active_turn_id === undefined ? project.active_turn_id : patch.active_turn_id,
+        patch.agent_goal === undefined ? project.agent_goal : patch.agent_goal,
+        lastAgentUpdate,
+        updated,
+        slug
+      );
+    return this.getProjectBySlug(slug, false);
   }
 
   listRequests(filter: { projectSlug?: string; types?: RequestType[]; includeDone?: boolean } = {}): RequestRecord[] {
@@ -528,6 +676,11 @@ Act on this response in one scoped work cycle. If no code change is needed, upda
       this.db
         .prepare("UPDATE runs SET status = 'running', started_at = ?, updated_at = ? WHERE id = ?")
         .run(started, started, job.run_id);
+      this.updateProjectAgentState(job.project_slug, {
+        agent_status: "running",
+        active_turn_id: job.run_id,
+        last_agent_update_at: started
+      });
       this.recordWorkerHeartbeat(workerId, job.id);
       return this.getJob(job.id);
     });
@@ -568,10 +721,13 @@ Act on this response in one scoped work cycle. If no code change is needed, upda
         `UPDATE projects
          SET last_worker_run_at = ?,
              last_heartbeat_at = CASE WHEN ? = 'heartbeat' THEN ? ELSE last_heartbeat_at END,
+             agent_status = 'idle',
+             active_turn_id = NULL,
+             last_agent_update_at = ?,
              updated_at = ?
          WHERE slug = ?`
       )
-      .run(finished, job.job_type, finished, finished, job.project_slug);
+      .run(finished, job.job_type, finished, finished, finished, job.project_slug);
     return this.getRun(job.run_id);
   }
 
@@ -587,6 +743,11 @@ Act on this response in one scoped work cycle. If no code change is needed, upda
     this.db
       .prepare("UPDATE runs SET status = ?, finished_at = ?, updated_at = ?, error = ? WHERE id = ?")
       .run(status, finished, finished, error, job.run_id);
+    this.updateProjectAgentState(job.project_slug, {
+      agent_status: status === "failed" ? "failed" : "idle",
+      active_turn_id: null,
+      last_agent_update_at: finished
+    });
     return this.getRun(job.run_id);
   }
 
@@ -650,15 +811,22 @@ Act on this response in one scoped work cycle. If no code change is needed, upda
     this.db
       .prepare(
         `INSERT INTO projects (
-          id, slug, name, path, type, autonomy, status, one_liner, current_now_task,
+          id, slug, name, path, type, autonomy, status, build_phase, codex_thread_id,
+          agent_status, active_turn_id, agent_goal, last_agent_update_at, one_liner, current_now_task,
           created_at, updated_at, last_heartbeat_at, last_worker_run_at, stale_after_hours, auto_queue_when_stale
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(slug) DO UPDATE SET
           name = excluded.name,
           path = excluded.path,
           type = excluded.type,
           autonomy = excluded.autonomy,
           status = excluded.status,
+          build_phase = excluded.build_phase,
+          codex_thread_id = excluded.codex_thread_id,
+          agent_status = excluded.agent_status,
+          active_turn_id = excluded.active_turn_id,
+          agent_goal = excluded.agent_goal,
+          last_agent_update_at = excluded.last_agent_update_at,
           one_liner = excluded.one_liner,
           current_now_task = excluded.current_now_task,
           stale_after_hours = excluded.stale_after_hours,
@@ -673,6 +841,12 @@ Act on this response in one scoped work cycle. If no code change is needed, upda
         project.type,
         project.autonomy,
         project.status,
+        project.build_phase,
+        project.codex_thread_id,
+        project.agent_status,
+        project.active_turn_id,
+        project.agent_goal,
+        project.last_agent_update_at,
         project.one_liner,
         project.current_now_task,
         project.created_at,
@@ -828,7 +1002,25 @@ function sqlList(values: readonly string[]): string {
 function normalizeProjectRecord(project: ProjectRecord): ProjectRecord {
   return {
     ...project,
+    build_phase: project.build_phase ?? "initial-build",
+    codex_thread_id: project.codex_thread_id ?? null,
+    agent_status: normalizeAgentStatus(project.agent_status),
+    active_turn_id: project.active_turn_id ?? null,
+    agent_goal: project.agent_goal ?? null,
+    last_agent_update_at: project.last_agent_update_at ?? null,
     stale_after_hours: Number(project.stale_after_hours ?? 168),
     auto_queue_when_stale: Boolean(project.auto_queue_when_stale)
   };
+}
+
+function normalizeAgentStatus(status: ProjectAgentStatus | null | undefined): ProjectAgentStatus {
+  return isProjectAgentStatus(status) ? status : "idle";
+}
+
+function isProjectAgentStatus(status: string | null | undefined): status is ProjectAgentStatus {
+  return Boolean(status && ["idle", "queued", "running", "failed", "blocked"].includes(status));
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }

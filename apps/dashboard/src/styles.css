@@ -193,6 +193,7 @@ a {
 .project-card,
 .request-card,
 .run-card,
+.status-tile,
 .editor-panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -319,6 +320,7 @@ a {
 
 .tag,
 .run-badge,
+.phase-badge,
 .status-pill {
   display: inline-flex;
   gap: 5px;
@@ -330,6 +332,16 @@ a {
   color: #4b5563;
   font-size: 12px;
   white-space: nowrap;
+}
+
+.phase-badge.initial-build {
+  background: #fff7ed;
+  color: var(--amber);
+}
+
+.phase-badge.working {
+  background: #e7f6ef;
+  color: #047857;
 }
 
 .status-pill.online,
@@ -350,6 +362,11 @@ a {
 .run-badge.open {
   background: #eef4ff;
   color: var(--blue);
+}
+
+.run-badge.none {
+  background: #f0f2f5;
+  color: var(--muted);
 }
 
 .now-task {
@@ -418,6 +435,19 @@ a {
   margin-top: 3px;
 }
 
+.row-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.row-badges span {
+  display: inline-flex;
+  margin-top: 0;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -459,6 +489,37 @@ a {
   padding: 16px;
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
+}
+
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.status-tile {
+  min-height: 150px;
+  padding: 14px;
+  display: grid;
+  align-content: start;
+  gap: 9px;
+}
+
+.status-tile > span {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.status-tile strong {
+  font-size: 18px;
+}
+
+.status-tile p {
+  color: var(--muted);
+  margin: 0;
+  line-height: 1.45;
 }
 
 .queue-section {
@@ -704,6 +765,7 @@ a {
   .nav-list,
   .metric-grid,
   .two-column,
+  .status-grid,
   .form-grid,
   .file-preview-grid,
   .docs-grid,

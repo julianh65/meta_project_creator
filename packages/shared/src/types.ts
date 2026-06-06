@@ -16,6 +16,12 @@ export type AutonomyLevel = (typeof AUTONOMY_LEVELS)[number];
 export const PROJECT_STATUSES = ["active", "paused", "stale", "archived"] as const;
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
 
+export const PROJECT_PHASES = ["initial-build", "working"] as const;
+export type ProjectPhase = (typeof PROJECT_PHASES)[number];
+
+export const PROJECT_AGENT_STATUSES = ["idle", "queued", "running", "failed", "blocked"] as const;
+export type ProjectAgentStatus = (typeof PROJECT_AGENT_STATUSES)[number];
+
 export const REQUEST_TYPES = [
   "needs_julian",
   "browser_ops",
@@ -48,6 +54,7 @@ export const REQUEST_STATUSES = [
 export type RequestStatus = (typeof REQUEST_STATUSES)[number];
 
 export const RUN_TYPES = [
+  "initial-build",
   "heartbeat",
   "feedback",
   "manual-job",
@@ -85,6 +92,12 @@ export interface ProjectRecord {
   type: ProjectType;
   autonomy: AutonomyLevel;
   status: ProjectStatus;
+  build_phase: ProjectPhase;
+  codex_thread_id: string | null;
+  agent_status: ProjectAgentStatus;
+  active_turn_id: string | null;
+  agent_goal: string | null;
+  last_agent_update_at: string | null;
   one_liner: string;
   current_now_task: string | null;
   created_at: string;
@@ -217,6 +230,8 @@ export interface ProjectDetail extends ProjectRecord {
   jobs: JobRecord[];
   recentLogEntries: string[];
   manualCommand: string;
+  managerCommand: string;
+  managerExecCommand: string;
 }
 
 export interface DashboardSummary {

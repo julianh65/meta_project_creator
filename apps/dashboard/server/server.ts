@@ -8,6 +8,7 @@ import {
   allowedProjectFile,
   generateProjectDraft,
   PROJECT_TYPES,
+  PROJECT_PHASES,
   AUTONOMY_LEVELS,
   REQUEST_STATUSES,
   StartupStorage
@@ -54,6 +55,7 @@ const createProjectSchema = z.object({
     files: z.record(z.string())
   }),
   scaffold: z.boolean().optional(),
+  runInitialBuild: z.boolean().optional(),
   runFirstHeartbeat: z.boolean().optional()
 });
 
@@ -86,6 +88,7 @@ app.post("/api/projects", (req, res) => {
   const parsed = createProjectSchema.parse(req.body);
   const project = storage.createProjectFromDraft(parsed.draft, {
     scaffold: parsed.scaffold,
+    runInitialBuild: parsed.runInitialBuild,
     runFirstHeartbeat: parsed.runFirstHeartbeat
   });
   res.status(201).json(project);
@@ -102,6 +105,20 @@ app.get("/api/projects/:slug", (req, res) => {
 
 app.post("/api/projects/:slug/heartbeat", (req, res) => {
   res.status(201).json(storage.enqueueHeartbeat(req.params.slug));
+});
+
+app.post("/api/projects/:slug/initial-build", (req, res) => {
+  res.status(201).json(storage.enqueueInitialBuild(req.params.slug));
+});
+
+app.patch("/api/projects/:slug/phase", (req, res) => {
+  const parsed = z.object({ phase: z.enum(PROJECT_PHASES) }).parse(req.body);
+  const project = storage.updateProjectPhase(req.params.slug, parsed.phase);
+  if (!project) {
+    res.status(404).json({ error: "Project not found" });
+    return;
+  }
+  res.json(project);
 });
 
 app.post("/api/projects/:slug/feedback", (req, res) => {

@@ -30,6 +30,9 @@ describe("StartupStorage", () => {
 
     const project = storage.createProjectFromDraft(draft);
     assert.equal(project.slug, "local-login-demo");
+    assert.equal(project.build_phase, "initial-build");
+    assert.equal(project.agent_status, "idle");
+    assert.equal(project.codex_thread_id, null);
     assert.equal(fs.existsSync(path.join(project.path, "AGENTS.md")), true);
     assert.equal(fs.existsSync(path.join(project.path, "PROJECT.md")), true);
     assert.equal(fs.existsSync(path.join(project.path, "QUEUE.md")), true);
@@ -94,18 +97,37 @@ describe("StartupStorage", () => {
     const draft = generateProjectDraft({ rawPrompt: "A tiny CLI for trying repo experiments.", name: "Repo Runner", type: "cli" });
     const project = storage.createProjectFromDraft(draft);
     const run = storage.enqueueHeartbeat(project.slug);
+    assert.equal(storage.getProjectBySlug(project.slug)?.agent_status, "queued");
     const job = storage.claimNextJob("test-worker");
 
     assert.equal(run.status, "queued");
     assert.equal(job?.status, "running");
     assert.equal(job?.run_id, run.id);
+    assert.equal(storage.getProjectBySlug(project.slug)?.agent_status, "running");
 
     storage.appendRunLogs(run.id, "hello logs\n");
     const completed = storage.completeJob(job!.id, "Dry run complete.");
 
     assert.equal(completed.status, "succeeded");
     assert.match(completed.logs, /hello logs/);
+    assert.equal(storage.getProjectBySlug(project.slug)?.agent_status, "idle");
     assert.ok(storage.getProjectBySlug(project.slug)?.last_heartbeat_at);
+    storage.close();
+  });
+
+  it("stores a persistent Codex manager thread and resume command", () => {
+    const storage = tempStorage();
+    const draft = generateProjectDraft({ rawPrompt: "A tiny web app for explaining papers.", name: "Paper Explainer", type: "web" });
+    const project = storage.createProjectFromDraft(draft);
+    const threadId = "0199a213-81c0-7800-8aa1-bbab2a035a53";
+
+    storage.setProjectCodexThread(project.slug, threadId);
+    const detail = storage.getProjectDetail(project.slug);
+
+    assert.equal(detail?.codex_thread_id, threadId);
+    assert.match(detail?.files["PROJECT.md"] ?? "", new RegExp(threadId));
+    assert.match(detail?.managerCommand ?? "", new RegExp(`codex resume --include-non-interactive ${threadId}`));
+    assert.match(detail?.managerExecCommand ?? "", new RegExp(`codex exec resume ${threadId}`));
     storage.close();
   });
 });

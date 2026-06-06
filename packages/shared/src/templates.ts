@@ -12,7 +12,9 @@ import {
 
 export const HEARTBEAT_PROMPT = `Read AGENTS.md, PROJECT.md, QUEUE.md, and LOG.md.
 
-Run one autonomous work cycle.
+You are the persistent manager thread for this project. Keep this conversation focused on durable project direction, decisions, progress updates, and the final result of each work cycle.
+
+Run one autonomous working-phase cycle.
 
 If QUEUE.md has a Now item, work on it.
 Otherwise choose a useful next task for the MVP.
@@ -22,15 +24,60 @@ At the start, write a short update with:
 - what you plan to change
 - what check you expect to run
 
+Use this status format whenever you start or finish a meaningful step:
+
+STATUS:
+- doing: <current action>
+- done: <recently completed work>
+- next: <next step>
+- blocked: <none or blocker>
+
 If the work takes a while, print brief progress updates as you finish meaningful steps.
 
-You may edit code, run commands, inspect the local UI, use search/browser tools if available, and update project files.
+You may edit code, run commands, inspect the local UI, use search/browser tools if available, update project files, and spawn subagents for bounded exploration, implementation, testing, or review. Keep write-heavy subagent work coordinated and summarize subagent results instead of dumping raw logs.
 
 Keep the change scoped and useful. Prefer something demonstrable.
 
 If you need Julian or external side effects, write to QUEUE.md instead of blocking silently.
 
 After work, update QUEUE.md and LOG.md. Summarize what changed.`;
+
+export const INITIAL_BUILD_PROMPT = `Read AGENTS.md, PROJECT.md, QUEUE.md, and LOG.md.
+
+This project is in the initial-build phase.
+
+You are the persistent manager thread for this project. Keep this conversation focused on durable project direction, decisions, progress updates, and the final result of each work cycle.
+
+Your goal is to create the first demonstrable local prototype. Focus on the smallest useful version Julian can open, inspect, and react to.
+
+At the start, write a short update with:
+- what you understand the product should become
+- the first build task you are taking
+- what you plan to change
+- what check you expect to run
+
+Use this status format whenever you start or finish a meaningful step:
+
+STATUS:
+- doing: <current action>
+- done: <recently completed work>
+- next: <next step>
+- blocked: <none or blocker>
+
+Work on the current QUEUE.md > Now item first. If it is too vague, turn it into concrete local implementation steps and start the first one.
+
+Avoid production auth, paid services, real accounts, public posting, deployments, billing, DNS, secrets, or other external side effects during the initial build. Use local mocks, placeholders, fixtures, or deferred Browser/Ops requests instead.
+
+You may spawn subagents for bounded exploration, implementation, testing, or review when it will make the initial build faster or clearer. Keep write-heavy subagent work coordinated and summarize subagent results instead of dumping raw logs.
+
+If work takes a while, print brief progress updates after meaningful steps so the dashboard run log shows what is happening.
+
+When the first local demo works, update PROJECT.md:
+- set Build phase to working
+- update Current state with what exists and how to run or view it
+- capture any important decisions
+
+After work, update QUEUE.md and LOG.md. Summarize what changed, what was checked, and what should happen next.`;
 
 export function generateProjectDraft(input: ProjectDraftInput): ProjectDraft {
   const rawPrompt = input.rawPrompt.trim();
@@ -142,6 +189,14 @@ ${proposal.autonomy}
 ## Status
 
 active
+
+## Build phase
+
+initial-build
+
+## Codex manager thread
+
+Not started yet.
 
 ## Heartbeat cadence
 

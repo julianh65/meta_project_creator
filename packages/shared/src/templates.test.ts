@@ -14,6 +14,8 @@ describe("project onboarding templates", () => {
     assert.equal(draft.proposal.type, "mobile-expo");
     assert.deepEqual(Object.keys(draft.files).sort(), ["AGENTS.md", "LOG.md", "PROJECT.md", "QUEUE.md"]);
     assert.match(draft.files["PROJECT.md"], /## Original intent/);
+    assert.match(draft.files["PROJECT.md"], /## Build phase\s+initial-build/s);
+    assert.match(draft.files["PROJECT.md"], /## Codex manager thread\s+Not started yet\./s);
     assert.match(draft.files["AGENTS.md"], /## Mobile \/ Expo Policy/);
     assert.match(draft.files["QUEUE.md"], /## Browser\/Ops Requests/);
   });

@@ -2,10 +2,13 @@ import crypto from "node:crypto";
 import path from "node:path";
 import {
   AUTONOMY_LEVELS,
+  PROJECT_PHASES,
+  PROJECT_AGENT_STATUSES,
   PROJECT_STATUSES,
   PROJECT_TYPES,
   ParsedQueue,
   ProjectFileName,
+  ProjectPhase,
   ProjectRecord,
   ProjectStatus,
   ProjectType,
@@ -108,6 +111,8 @@ export function parseProjectMarkdown(
   const typeText = firstNonEmptyLine(getSection(projectMd, "Project type"));
   const autonomyText = firstNonEmptyLine(getSection(projectMd, "Autonomy level"));
   const statusText = firstNonEmptyLine(getSection(projectMd, "Status"));
+  const phaseText = firstNonEmptyLine(getSection(projectMd, "Build phase"));
+  const codexThreadText = firstNonEmptyLine(getSection(projectMd, "Codex manager thread"));
   const cadence = parseHeartbeatCadence(getSection(projectMd, "Heartbeat cadence"));
 
   const type = PROJECT_TYPES.includes(typeText as ProjectType)
@@ -119,6 +124,16 @@ export function parseProjectMarkdown(
   const status = PROJECT_STATUSES.includes(statusText as ProjectStatus)
     ? (statusText as ProjectStatus)
     : "active";
+  const buildPhase = PROJECT_PHASES.includes(phaseText as ProjectPhase)
+    ? (phaseText as ProjectPhase)
+    : existing?.build_phase ?? "initial-build";
+  const codexThreadId = isUuidLike(codexThreadText)
+    ? codexThreadText
+    : existing?.codex_thread_id ?? null;
+  const existingAgentStatus = existing?.agent_status;
+  const agentStatus = existingAgentStatus && PROJECT_AGENT_STATUSES.includes(existingAgentStatus)
+    ? existingAgentStatus
+    : "idle";
 
   return {
     id: existing?.id ?? stableId(projectPath),
@@ -128,6 +143,12 @@ export function parseProjectMarkdown(
     type,
     autonomy,
     status,
+    build_phase: buildPhase,
+    codex_thread_id: codexThreadId,
+    agent_status: agentStatus,
+    active_turn_id: existing?.active_turn_id ?? null,
+    agent_goal: existing?.agent_goal ?? null,
+    last_agent_update_at: existing?.last_agent_update_at ?? null,
     one_liner: oneLiner,
     current_now_task: firstOpenTask(queue.now),
     created_at: existing?.created_at ?? nowIso(),
@@ -137,6 +158,10 @@ export function parseProjectMarkdown(
     stale_after_hours: cadence.staleAfterHours ?? existing?.stale_after_hours ?? 168,
     auto_queue_when_stale: cadence.autoQueueWhenStale ?? existing?.auto_queue_when_stale ?? false
   };
+}
+
+function isUuidLike(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
 
 export function parseHeartbeatCadence(markdown: string): {
@@ -198,6 +223,29 @@ export function appendQueueItem(markdown: string, section: keyof ParsedQueue, te
   before.push(itemLine);
 
   return [...before, ...after].join("\n").replace(/\n{4,}/g, "\n\n\n").trimEnd() + "\n";
+}
+
+export function replaceMarkdownSection(markdown: string, heading: string, body: string): string {
+  const lines = markdown.split(/\r?\n/);
+  const sectionHeading = `## ${heading}`;
+  const start = lines.findIndex((line) => line.trim() === sectionHeading);
+
+  if (start === -1) {
+    return `${markdown.trimEnd()}\n\n${sectionHeading}\n\n${body.trim()}\n`;
+  }
+
+  let end = start + 1;
+  while (end < lines.length && !lines[end]?.startsWith("## ")) {
+    end += 1;
+  }
+
+  return [
+    ...lines.slice(0, start + 1),
+    "",
+    body.trim(),
+    "",
+    ...lines.slice(end)
+  ].join("\n").replace(/\n{4,}/g, "\n\n\n").trimEnd() + "\n";
 }
 
 export function appendLogEntry(markdown: string, message: string, date = todaySlug()): string {
